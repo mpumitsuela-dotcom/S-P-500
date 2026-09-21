@@ -1,0 +1,26 @@
+# Secrets - never commit
+.env
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+
+# Generated demo output
+demo_tearsheet.html
+
+# OS
+.DS_Store
+
+# NOTE on what's deliberately NOT ignored:
+# .cache/, .state/, trade_log.csv, TRADE_LOG.md, and TRIAL_REPORT.md are
+# tracked in git on purpose. When automation runs from a fresh clone in the
+# cloud on every scheduled firing (see README.md "Cloud automation"), these
+# are the only way the dispatcher's "did I already trade today" markers,
+# the 30-day trial clock, the fundamentals/research cache, and the trade
+# history survive between runs - there is no persistent disk otherwise.
+# logs/ is left out deliberately: it's low-value, append-only, and each
+# run's own log is visible in that scheduled task's own history anyway.
+logs/
