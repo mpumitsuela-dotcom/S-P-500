@@ -11,6 +11,7 @@ every check passes.
 """
 from __future__ import annotations
 
+import re
 import sys
 from datetime import date, timedelta
 from pathlib import Path
@@ -29,13 +30,19 @@ def _alpaca_headers() -> dict:
     return {"APCA-API-KEY-ID": API_KEYS.alpaca_key_id, "APCA-API-SECRET-KEY": API_KEYS.alpaca_secret_key}
 
 
+def _redact(text: str) -> str:
+    """Error messages from requests include the full URL, and FMP/Finnhub take
+    their key as a query parameter - never print it."""
+    return re.sub(r"(apikey|token)=[^&\s)'\"]*", r"\1=***", text)
+
+
 def _check(name: str, fn) -> bool:
     try:
         detail = fn()
         print(f"  OK    {name}: {detail}")
         return True
     except Exception as exc:  # noqa: BLE001 - report every failure, keep checking
-        print(f"  FAIL  {name}: {exc}")
+        print(f"  FAIL  {name}: {_redact(str(exc))}")
         return False
 
 

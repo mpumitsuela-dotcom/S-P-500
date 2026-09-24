@@ -40,8 +40,8 @@ env:
   ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
   ALPACA_API_SECRET_KEY: ${{ secrets.ALPACA_API_SECRET_KEY }}
   ALPACA_BASE_URL: https://paper-api.alpaca.markets
-  FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
-  FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+  FMP_API_KEY: ${{ secrets.FMP_API_KEY || secrets.FINANCIALMODELINGPREP }}
+  FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY || secrets.FINNHUB }}
 
 jobs:
   dispatch:
