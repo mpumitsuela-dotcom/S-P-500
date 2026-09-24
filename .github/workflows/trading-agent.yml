@@ -61,8 +61,11 @@ jobs:
         run: |
           if git ls-remote --exit-code --heads origin "$STATE_BRANCH" >/dev/null; then
             git fetch --depth=1 origin "$STATE_BRANCH"
-            git checkout FETCH_HEAD -- .
+            # Record the parent first so the save step can always fast-forward.
             git rev-parse FETCH_HEAD > "$RUNNER_TEMP/state_parent"
+            # git archive (not checkout) so an empty state tree restores cleanly.
+            git archive FETCH_HEAD | tar -x
+            mkdir -p .state
             echo "Restored state from $STATE_BRANCH:"
             ls -la .state
           else
@@ -94,7 +97,7 @@ jobs:
           retention-days: 45
 
       - name: Save data cache
-        if: always()
+        if: always() && hashFiles('.cache/**') != ''
         uses: actions/cache/save@v4
         with:
           path: .cache
