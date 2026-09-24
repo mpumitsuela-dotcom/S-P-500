@@ -247,11 +247,10 @@ def _session_lines(records: list[dict]) -> list[str]:
     for r in records:
         if r.get("type") == "session":
             line = f"- **{r['date']} {names.get(r['session'], r['session'])}:** {labels.get(r['outcome'], r['outcome'])} — {r.get('detail', '')}"
-            if r.get("excluded_unresearched"):
-                line += (
-                    f" Not bought because no research could be fetched for them: "
-                    f"{', '.join(r['excluded_unresearched'])}."
-                )
+            excluded = r.get("excluded_unresearched") or []
+            if excluded:
+                shown = ", ".join(excluded[:12]) + (f" and {len(excluded) - 12} more" if len(excluded) > 12 else "")
+                line += f" Not bought because no research could be fetched for them: {shown}."
             out.append(line)
     return out
 

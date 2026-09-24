@@ -173,7 +173,7 @@ def test_failed_session_raises_an_alert(monkeypatch, clones):
         raise RuntimeError("boom")
 
     rc = run_shared.main(root=cloud, now_ny=ny(9, 40), run_session=crash, market_open=lambda: True,
-                         alert=lambda *a: alerts.append(a))
+                         alert=lambda *a, **k: alerts.append(a))
     assert rc == 1
     assert alerts == [(ny(9, 40).date(), "cloud", ["morning"], 1, "The morning step raised RuntimeError('boom').")]
 

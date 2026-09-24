@@ -67,3 +67,13 @@ def test_alert_posts_issue_and_never_raises(monkeypatch):
 
     monkeypatch.setattr(daily_report, "publish_issue", lambda *a: (_ for _ in ()).throw(RuntimeError("403")))
     alerts.alert_if_needed(DAY, "github-actions", ["morning"], 2)  # must not raise
+
+
+def test_earlier_failure_is_not_re_alerted_by_a_later_good_run():
+    from datetime import timedelta
+
+    decisions.record_session("AM", "crashed", "TypeError: boom", now=AT)
+    later = AT + timedelta(minutes=10)
+    decisions.record_session("AM", "completed", "6 order(s) placed", now=later)
+    assert alerts.build_alert(DAY, "github-actions", ["morning"], 0, since=later - timedelta(seconds=5)) is None
+    assert alerts.build_alert(DAY, "github-actions", ["morning"], 0) is not None  # without since it would

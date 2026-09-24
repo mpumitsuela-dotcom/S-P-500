@@ -114,10 +114,10 @@ def _run_session(name: str) -> int:
     return mod.main() or 0
 
 
-def _alert(day, runner: str, sessions: list[str], rc: int, note: str = "") -> None:
+def _alert(day, runner: str, sessions: list[str], rc: int, note: str = "", since: datetime | None = None) -> None:
     from execution import alerts
 
-    alerts.alert_if_needed(day, runner, sessions, rc, note)
+    alerts.alert_if_needed(day, runner, sessions, rc, note, since)
 
 
 def main(
@@ -179,6 +179,7 @@ def main(
 
     rc = 0
     notes = []
+    started = datetime.now(NY_TZ)  # session records are stamped with the real clock
     for s in claimed:
         _log(f"running {s} session")
         try:
@@ -201,7 +202,7 @@ def main(
         rc = max(rc, 1)
 
     # Tell the owner now (GitHub issue -> email) rather than at the end of the day.
-    alert(now_ny.date(), runner, claimed, rc, " ".join(notes))
+    alert(now_ny.date(), runner, claimed, rc, " ".join(notes), since=started)
     return rc
 
 

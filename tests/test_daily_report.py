@@ -145,3 +145,13 @@ def test_no_trade_day_explains_why(report_dirs, monkeypatch):
     text = (report_dirs / "daily" / "2026-09-24.md").read_text()
     assert "Morning rebalance:** HALTED — Safety check stopped the session: data_freshness: stale" in text
     assert "No stocks were bought." in text
+
+
+def test_long_excluded_list_is_summarised(report_dirs, monkeypatch):
+    monkeypatch.setattr(daily_report, "_spy_closes", lambda s, e: {})
+    now = datetime(2026, 9, 24, 9, 45, tzinfo=NY_TZ)
+    decisions.record_session("AM", "completed", "2 order(s) placed", now=now,
+                             excluded_unresearched=[f"S{i:03d}" for i in range(300)])
+    daily_report.run_end_of_day(date(2026, 9, 24), broker=FakeBroker(100_000.0))
+    text = (report_dirs / "daily" / "2026-09-24.md").read_text()
+    assert "S011 and 288 more." in text and "S299" not in text
