@@ -1,16 +1,20 @@
 # Runs the trading agent unattended on GitHub Actions.
 #
 # The cron fires every 15 minutes across the whole US trading day (in UTC, it
-# covers both EDT and EST). Every firing runs scheduler/dispatcher.py, which
+# covers both EDT and EST). Every firing runs scheduler/run_shared.py, which
 # decides from real New York time whether to run the AM session (9:30-10:35 ET,
 # the first hour after the open), the PM session (2:55-4:00 ET, into the close),
-# or nothing. The dispatcher runs each session at most once per day, so the
+# or nothing. Each session runs at most once per day, so the
 # extra firings do nothing.
+#
+# This is the PRIMARY runner. Your PC can run the same schedule as a BACKUP
+# (scripts/run_pc.bat): both go through scheduler/run_shared.py, which shares
+# state via the `agent-state` branch and claims each session before trading,
+# so a session never runs twice.
 #
 # Persistence: a fresh runner has no disk from the previous run, so:
 #   - .state/ (trial clock, "ran today" markers, KILL_SWITCH), trade_log.csv,
-#     TRADE_LOG.md and TRIAL_REPORT.md are committed to the `agent-state`
-#     branch after every run, and restored from it before the next one.
+#     TRADE_LOG.md and TRIAL_REPORT.md live on the `agent-state` branch.
 #   - .cache/ (fundamentals/research/price cache that backfills the free-tier
 #     quotas over several days) goes in the Actions cache.
 #
@@ -31,8 +35,6 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  STATE_BRANCH: agent-state
-  STATE_PATHS: .state trade_log.csv TRADE_LOG.md TRIAL_REPORT.md
   # $10K budget: fewer, larger positions so whole-share orders still fill.
   SP500_CAPITAL_BUDGET: "10000"
   SP500_NUM_POSITIONS: "15"
@@ -57,21 +59,6 @@ jobs:
 
       - run: pip install -r requirements.txt
 
-      - name: Restore agent state
-        run: |
-          if git ls-remote --exit-code --heads origin "$STATE_BRANCH" >/dev/null; then
-            git fetch --depth=1 origin "$STATE_BRANCH"
-            # Record the parent first so the save step can always fast-forward.
-            git rev-parse FETCH_HEAD > "$RUNNER_TEMP/state_parent"
-            # git archive (not checkout) so an empty state tree restores cleanly.
-            git archive FETCH_HEAD | tar -x
-            mkdir -p .state
-            echo "Restored state from $STATE_BRANCH:"
-            ls -la .state
-          else
-            echo "No $STATE_BRANCH branch yet - first run, starting fresh."
-          fi
-
       - name: Restore data cache
         uses: actions/cache/restore@v4
         with:
@@ -84,8 +71,11 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         run: python scripts/check_connections.py
 
-      - name: Run dispatcher
-        run: python scheduler/dispatcher.py
+      - name: Run agent (shared with the PC backup runner)
+        env:
+          SP500_RUNNER_ROLE: primary
+          SP500_RUNNER_NAME: github-actions
+        run: python scheduler/run_shared.py
 
       - name: Upload logs
         if: always()
@@ -103,23 +93,3 @@ jobs:
           path: .cache
           # Content-addressed: an unchanged cache maps to an existing key and is skipped.
           key: agent-cache-${{ hashFiles('.cache/**') }}
-
-      - name: Save agent state
-        if: always()
-        run: |
-          # Build the commit from a private index so the main checkout is untouched.
-          export GIT_INDEX_FILE="$RUNNER_TEMP/state.index"
-          rm -f "$GIT_INDEX_FILE"
-          for p in $STATE_PATHS; do
-            [ -e "$p" ] && git add -f -- "$p"
-          done
-          tree=$(git write-tree)
-          parent=$(cat "$RUNNER_TEMP/state_parent" 2>/dev/null || true)
-          if [ -n "$parent" ] && [ "$tree" = "$(git rev-parse "$parent^{tree}")" ]; then
-            echo "State unchanged - nothing to save."
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          commit=$(git commit-tree "$tree" ${parent:+-p "$parent"} -m "Agent state after run ${{ github.run_id }}")
-          git push origin "$commit:refs/heads/$STATE_BRANCH"

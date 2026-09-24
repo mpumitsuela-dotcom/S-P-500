@@ -89,12 +89,16 @@ backtest/
 scheduler/
   run_morning.py             AM job: full rebalance (uses research)
   run_afternoon.py             PM job: risk check + tactical trim only
+  dispatcher.py                  Decides which session is due (NY time, holidays)
+  run_shared.py                   Cloud + PC runner with a shared claim lock
+  shared_state.py                  Syncs state via the agent-state branch
 scripts/
   demo_backtest.py            Runs the whole pipeline on synthetic data
   check_connections.py         Tests every API connection with your keys
+  run_pc.bat / install_pc_task.bat  Windows backup runner + Task Scheduler setup
 .github/workflows/
   trading-agent.yml          Unattended twice-daily schedule on GitHub Actions
-tests/                     70 tests, no network calls, run with `pytest`
+tests/                     77 tests, no network calls, run with `pytest`
 ```
 
 ## Safety guards (execution/guards.py)
@@ -102,9 +106,12 @@ tests/                     70 tests, no network calls, run with `pytest`
 Every scheduled run must pass ALL of these before any order is placed. Any
 failure halts that run - no partial trading, no "best effort":
 
-1. **Kill switch** - if `.state/KILL_SWITCH` exists, nothing trades. Create
-   it yourself any time (`touch sp500_agent/.state/KILL_SWITCH`) to
-   instantly pause the system; delete it to resume.
+1. **Kill switch** - if `.state/KILL_SWITCH` exists on the `agent-state`
+   branch, nothing trades on any machine. To pause everything, open the
+   `agent-state` branch on GitHub, then Add file -> Create new file, named
+   `.state/KILL_SWITCH`. Delete it to resume. To pause only your PC, create
+   an empty file named `KILL_SWITCH` in the project folder (not in
+   `.state/`).
 2. **Live-trading gate** - see "Live trading" below.
 3. **Market hours** - refuses to trade outside the regular NYSE session
    (9:30am-4:00pm America/New_York, Mon-Fri).
@@ -234,16 +241,16 @@ calendar days from its first real run, then **stops itself automatically**:
 **Extending or restarting the trial:** after reading `TRIAL_REPORT.md`,
 decide how to proceed:
 
-- To let it keep running unchanged: increase `SP500_TRIAL_DAYS` in `.env`
-  (e.g. to 60) - the existing start date is kept, so this just extends the
-  same window.
+- To let it keep running unchanged: increase `SP500_TRIAL_DAYS` (e.g. to
+  60) in the workflow's `env:` block and in your PC's `.env`. The existing
+  start date is kept, so this just extends the same window.
 - To start a fresh 30-day window from today (keeping all history and the
-  trade log): delete the two marker files -
-  `rm .state/trial_start_date.txt .state/trial_start_equity.txt` (or call
-  `execution.trial.reset_trial()`) - the next run starts a new trial.
+  trade log): on GitHub, delete `.state/trial_start_date.txt` and
+  `.state/trial_start_equity.txt` from the `agent-state` branch. The next
+  run starts a new trial.
   `TRIAL_REPORT.md` and the trade log are not touched by this; copy or
   rename `TRIAL_REPORT.md` first if you want to keep that exact snapshot.
-- To stop entirely: `touch .state/KILL_SWITCH` (see "Safety guards" above).
+- To stop entirely: create `.state/KILL_SWITCH` on the `agent-state` branch (see "Safety guards" above).
 
 ## Trade log & rationale
 
@@ -350,7 +357,7 @@ the mocked tests alone.
    clean, the whole factor -> portfolio -> execution -> metrics pipeline is
    wired correctly before you spend a single real API call.
 
-4. **Run the test suite** (70 tests, no network calls):
+4. **Run the test suite** (77 tests, no network calls):
    ```bash
    pytest -q
    ```
@@ -412,7 +419,7 @@ working live: it correctly halted a test run outside regular NYSE hours.
 computer can be off.
 
 - **When it runs:** every 15 minutes, Mon-Fri, during US market hours.
-  Each firing runs `scheduler/dispatcher.py`, which checks real New York
+  Each firing runs `scheduler/run_shared.py`, which checks real New York
   time and Alpaca's market clock (this skips exchange holidays). It runs
   the **AM session once in the first hour after the open (9:30-10:35 ET)**
   and the **PM session once into the close (2:55-4:00 ET)**. All other
@@ -420,8 +427,8 @@ computer can be off.
   which is why the windows are about an hour wide.
 - **What persists between runs:** the trial clock, the "already ran today"
   markers, the kill switch, `trade_log.csv`, `TRADE_LOG.md` and
-  `TRIAL_REPORT.md` are committed to the **`agent-state` branch** after
-  every run. Open that branch on GitHub to read the trade log. The
+  `TRIAL_REPORT.md` live on the **`agent-state` branch**, which the cloud
+  and PC runners share. Open that branch on GitHub to read the trade log. The
   fundamentals/research cache goes in the Actions cache. Each run's logs
   are uploaded as a run artifact.
 - **Failures are visible:** a guard halt or crash marks the run red, and
@@ -443,6 +450,51 @@ computer can be off.
    runs `scripts/check_connections.py`, which tests every API with your keys
    and prints OK/FAIL for each. Fix any FAIL before relying on the schedule.
    You can run the same check locally: `python3 scripts/check_connections.py`.
+
+### Running on your PC as well (backup runner)
+
+The agent can run from both GitHub Actions and your PC. The cloud is the
+**primary** runner and your PC is the **backup**:
+
+- Both check every 15 minutes through `scheduler/run_shared.py`.
+- The cloud runs a session as soon as its window opens. The PC waits 25
+  minutes into each window (`SP500_BACKUP_DELAY_MINUTES`). If the cloud has
+  already run that session, the PC does nothing. If the cloud failed or
+  was late, the PC runs it.
+- **A session never runs twice.** Before trading, a runner pushes a claim
+  to the `agent-state` branch. Git accepts only one of two competing
+  pushes, so if both machines try at the same moment, one is rejected,
+  re-checks, and stands down. The markers `.state/last_morning_run_by` and
+  `.state/last_afternoon_run_by` record which machine ran each session.
+- If a runner can't reach GitHub, it doesn't trade, because it can't tell
+  whether the other runner already has.
+
+To swap roles (PC primary, cloud backup), set `SP500_RUNNER_ROLE: backup`
+in the workflow and `set SP500_RUNNER_ROLE=primary` in `scripts/run_pc.bat`.
+
+**PC setup (Windows):**
+
+1. Install [Python 3.11+](https://www.python.org/downloads/) (tick "Add
+   python.exe to PATH") and [Git for Windows](https://git-scm.com/download/win).
+2. Clone the repo and install dependencies:
+   ```
+   git clone https://github.com/mpumitsuela-dotcom/S-P-500.git
+   cd S-P-500
+   python -m venv .venv
+   .venv\Scripts\pip install -r requirements.txt
+   ```
+3. Copy `.env.example` to `.env` and fill in the same four API keys as the
+   GitHub secrets.
+4. Check it works: `.venv\Scripts\python scripts\check_connections.py`
+   should say 7/7. Then run `scripts\run_pc.bat` once. The first push to
+   GitHub opens a sign-in window, and signing in lets the PC update the
+   shared state.
+5. Double-click `scripts\install_pc_task.bat` to run it every 15 minutes.
+   What it did goes to `logs\pc_runner.log`.
+
+The PC only covers for the cloud while it's switched on, awake and logged
+in. On Mac/Linux, use cron instead:
+`*/15 * * * 1-5 cd /path/to/S-P-500 && SP500_RUNNER_ROLE=backup .venv/bin/python scheduler/run_shared.py >> logs/pc_runner.log 2>&1`
 
 ### Budget
 
