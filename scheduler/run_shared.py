@@ -108,7 +108,19 @@ def _run_session(name: str) -> int:
     return mod.main() or 0
 
 
-def main(root: Path = PROJECT_ROOT, now_ny: datetime | None = None, run_session=_run_session, market_open=_market_open_per_alpaca) -> int:
+def _alert(day, runner: str, sessions: list[str], rc: int, note: str = "") -> None:
+    from execution import alerts
+
+    alerts.alert_if_needed(day, runner, sessions, rc, note)
+
+
+def main(
+    root: Path = PROJECT_ROOT,
+    now_ny: datetime | None = None,
+    run_session=_run_session,
+    market_open=_market_open_per_alpaca,
+    alert=_alert,
+) -> int:
     role = os.environ.get("SP500_RUNNER_ROLE", "primary").strip().lower()
     runner = os.environ.get("SP500_RUNNER_NAME") or socket.gethostname()
     if role not in ("primary", "backup"):
@@ -160,12 +172,14 @@ def main(root: Path = PROJECT_ROOT, now_ny: datetime | None = None, run_session=
         return 1
 
     rc = 0
+    notes = []
     for s in claimed:
         _log(f"running {s} session")
         try:
             rc = max(rc, run_session(s))
         except Exception as exc:  # noqa: BLE001 - still publish whatever state exists
             _log(f"{s} session raised: {exc!r}")
+            notes.append(f"The {s} step raised {exc!r}.")
             rc = max(rc, 1)
 
     # Publish the trade log and state. Only the claimant writes during a
@@ -177,7 +191,11 @@ def main(root: Path = PROJECT_ROOT, now_ny: datetime | None = None, run_session=
         parent = _refetch_parent(root)
     else:
         _log("WARNING: could not publish the session's state")
+        notes.append("The trade log and state could not be saved to the agent-state branch.")
         rc = max(rc, 1)
+
+    # Tell the owner now (GitHub issue -> email) rather than at the end of the day.
+    alert(now_ny.date(), runner, claimed, rc, " ".join(notes))
     return rc
 
 

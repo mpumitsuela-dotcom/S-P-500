@@ -123,3 +123,32 @@ def test_recording_failure_never_breaks_trading(market, monkeypatch):
     monkeypatch.setattr(decisions, "_append", boom)
     assert run_morning.main() == 0
     assert broker.orders
+
+
+def test_every_new_buy_is_researched_first(market, monkeypatch):
+    """Names outside the budgeted research batch get researched before buying;
+    a name whose research can't be fetched is never newly bought."""
+    tmp_path, symbols, research, _ = market
+    unresearchable = set(symbols[:10])
+    partial = research[~research["symbol"].isin(symbols[:20])]  # budget pass skipped 20 names
+    monkeypatch.setattr(run_morning, "get_research_frame", lambda syms, **k: partial)
+    fetched = []
+
+    def targeted(syms, max_new_symbols=None):
+        fetched.append(set(syms))
+        return research[research["symbol"].isin(set(syms) - unresearchable)]
+
+    real = run_morning.get_research_frame
+    monkeypatch.setattr(run_morning, "get_research_frame",
+                        lambda syms, max_new_symbols=None: partial if max_new_symbols is None else targeted(syms))
+    broker = FakeBroker()
+    monkeypatch.setattr(run_morning, "AlpacaBroker", lambda: broker)
+    assert run_morning.main() == 0
+
+    assert fetched, "missing research should have been fetched for target names"
+    bought = {sym for sym, _, side in broker.orders if side == "buy"}
+    assert bought and not (bought & unresearchable)
+    researched = set(partial["symbol"]) | set().union(*fetched) - unresearchable
+    assert bought <= researched
+    session = [r for r in _records(tmp_path) if r["type"] == "session"][-1]
+    assert set(session["excluded_unresearched"]) <= unresearchable

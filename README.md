@@ -83,6 +83,7 @@ execution/
   rationale.py                       Plain-English "why" for every order
   decisions.py                        Research snapshot behind every decision
   daily_report.py                      Daily + 5-day reports (files + GitHub issues)
+  alerts.py                             Needs-attention alerts (GitHub issues)
   trade_log.py                        Append-only trade log (CSV + Markdown)
   reporting.py                         Builds TRIAL_REPORT.md
 backtest/
@@ -100,7 +101,7 @@ scripts/
   run_pc.bat / install_pc_task.bat  Windows backup runner + Task Scheduler setup
 .github/workflows/
   trading-agent.yml          Unattended twice-daily schedule on GitHub Actions
-tests/                     89 tests, no network calls, run with `pytest`
+tests/                     98 tests, no network calls, run with `pytest`
 ```
 
 ## Safety guards (execution/guards.py)
@@ -254,6 +255,34 @@ decide how to proceed:
   rename `TRIAL_REPORT.md` first if you want to keep that exact snapshot.
 - To stop entirely: create `.state/KILL_SWITCH` on the `agent-state` branch (see "Safety guards" above).
 
+## Research before every buy
+
+The free API limits only refresh fundamentals (FMP) and news/analyst
+research (Finnhub) for a batch of stocks each morning. So before buying,
+the morning session checks every stock the portfolio wants to hold. For any
+that are missing fundamentals or research, it fetches them right then and
+re-ranks, because new research can change the ranking (up to 5 rounds). A
+stock that isn't already held and still has no research, because its fetch
+failed or the FMP daily quota ran out, is **not bought** that day. The
+daily report lists these stocks.
+
+## Alerts: when the agent needs attention
+
+If a session is stopped by a safety check, crashes, or can't save its
+state, the agent opens a GitHub issue straight away (label
+`needs-attention`), so GitHub emails you. It doesn't wait for the daily
+report. Each alert says which kind of problem it is:
+
+- **🟠 Decision needed:** an account-level choice for you. Either the
+  30-day trial ended, or the account fell past the drawdown limit, so new
+  buying stopped.
+- **⚠️ Technical problem:** stale data, API errors, bad prices, crashes.
+  Nothing is needed from you. These are diagnosed and fixed by Claude's
+  scheduled check-ins.
+
+Individual buy and sell decisions are made by the agent from its research;
+they never need your sign-off.
+
 ## Daily and 5-day reports
 
 After the close on every trading day (4:10-5:00pm ET), the agent writes a
@@ -388,7 +417,7 @@ the mocked tests alone.
    clean, the whole factor -> portfolio -> execution -> metrics pipeline is
    wired correctly before you spend a single real API call.
 
-4. **Run the test suite** (89 tests, no network calls):
+4. **Run the test suite** (98 tests, no network calls):
    ```bash
    pytest -q
    ```
