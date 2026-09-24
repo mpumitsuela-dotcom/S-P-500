@@ -102,6 +102,12 @@ class StrategyConfig:
 
     account_equity_fallback: float = float(os.environ.get("SP500_PAPER_EQUITY_FALLBACK", "100000"))
 
+    # Most money the agent will put to work, in dollars. Positions are sized on
+    # min(account equity, this). 0 means "use the whole account". Set the Alpaca
+    # paper account's balance to the same amount so the trial report's return
+    # (measured on account equity) reflects what was actually traded.
+    capital_budget: float = float(os.environ.get("SP500_CAPITAL_BUDGET", "10000"))
+
 
 API_KEYS = APIKeys()
 STRATEGY = StrategyConfig()

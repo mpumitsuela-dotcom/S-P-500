@@ -91,7 +91,10 @@ scheduler/
   run_afternoon.py             PM job: risk check + tactical trim only
 scripts/
   demo_backtest.py            Runs the whole pipeline on synthetic data
-tests/                     67 tests, no network calls, run with `pytest`
+  check_connections.py         Tests every API connection with your keys
+.github/workflows/
+  trading-agent.yml          Unattended twice-daily schedule on GitHub Actions
+tests/                     70 tests, no network calls, run with `pytest`
 ```
 
 ## Safety guards (execution/guards.py)
@@ -347,7 +350,7 @@ the mocked tests alone.
    clean, the whole factor -> portfolio -> execution -> metrics pipeline is
    wired correctly before you spend a single real API call.
 
-4. **Run the test suite** (67 tests, no network calls):
+4. **Run the test suite** (70 tests, no network calls):
    ```bash
    pytest -q
    ```
@@ -403,25 +406,65 @@ $100,000 paper account, real Alpaca bars and quotes, real FMP fundamentals,
 and real Finnhub news sentiment. The market-hours guard was also confirmed
 working live: it correctly halted a test run outside regular NYSE hours.
 
-## Turning on automation
+## Cloud automation (GitHub Actions)
 
-Don't automate this on day one. Recommended path:
+`.github/workflows/trading-agent.yml` runs the agent unattended. Your
+computer can be off.
 
-1. Run `run_morning.py` / `run_afternoon.py` manually for at least a
-   couple of weeks, reading the logs and tearsheets each time.
-2. Once you trust it, automate it with cron (or Task Scheduler on
-   Windows) on a machine that stays on, or via a scheduled task set up
-   through this conversation, bound to your own computer.
-3. Keep watching the logs periodically even after automating - the guards
-   are designed to fail safely, but "safely" means "stops trading and
-   tells you", not "silently fixes itself".
+- **When it runs:** every 15 minutes, Mon-Fri, during US market hours.
+  Each firing runs `scheduler/dispatcher.py`, which checks real New York
+  time and Alpaca's market clock (this skips exchange holidays). It runs
+  the **AM session once in the first hour after the open (9:30-10:35 ET)**
+  and the **PM session once into the close (2:55-4:00 ET)**. All other
+  firings do nothing. GitHub can delay scheduled runs by 5-15 minutes,
+  which is why the windows are about an hour wide.
+- **What persists between runs:** the trial clock, the "already ran today"
+  markers, the kill switch, `trade_log.csv`, `TRADE_LOG.md` and
+  `TRIAL_REPORT.md` are committed to the **`agent-state` branch** after
+  every run. Open that branch on GitHub to read the trade log. The
+  fundamentals/research cache goes in the Actions cache. Each run's logs
+  are uploaded as a run artifact.
+- **Failures are visible:** a guard halt or crash marks the run red, and
+  GitHub emails you. A crash also writes the kill switch into the saved
+  state, which stops all later runs. To resume after reviewing, delete
+  `.state/KILL_SWITCH` on the `agent-state` branch.
+- **Paper only:** the workflow pins `ALPACA_BASE_URL` to the paper endpoint.
+
+### Setup
+
+1. Merge this workflow into the default branch. GitHub only runs
+   scheduled workflows from the default branch.
+2. Repo **Settings -> Secrets and variables -> Actions**, add
+   `ALPACA_API_KEY_ID`, `ALPACA_API_SECRET_KEY`, `FMP_API_KEY` and
+   `FINNHUB_API_KEY` (use the Alpaca **Paper** keys).
+3. In the Alpaca paper dashboard, reset the paper account to **$10,000** so
+   it matches the budget (see below).
+4. **Actions -> trading-agent -> Run workflow.** A manual run first
+   runs `scripts/check_connections.py`, which tests every API with your keys
+   and prints OK/FAIL for each. Fix any FAIL before relying on the schedule.
+   You can run the same check locally: `python3 scripts/check_connections.py`.
+
+### Budget
+
+`SP500_CAPITAL_BUDGET` (default $10,000) caps how much the agent trades.
+Positions are sized on `min(account equity, budget)`. Orders are for whole
+shares, so the workflow uses 15 positions of about $650 each instead of 30
+positions of about $330. At $330 per position, many S&P 500 stocks would
+round down to zero shares. Resetting the paper account to $10K matters
+because the trial report measures return on the whole account. On a
+$100K account with $10K invested, the return would look about 10x too small.
+
+GitHub Actions usage: roughly 36 short runs per trading day, about 800
+minutes a month. That fits the free 2,000 minutes for a private repo, and
+public repos are free.
 
 ## Extending this
 
 - Add a real point-in-time fundamentals source (SEC EDGAR XBRL) to remove
   the backtest's fundamentals limitation.
-- Add a holiday calendar to `check_market_hours` (currently only checks
-  weekends).
+- Add a holiday calendar to `check_market_hours` itself. The dispatcher
+  already skips holidays using Alpaca's clock, but the guard only checks
+  weekends when the session scripts are run by hand.
 - Swap the keyword-based news sentiment for a proper NLP/sentiment model.
 - Add Tiingo as a secondary price source for redundancy.
 

@@ -134,7 +134,17 @@ def main() -> int:
         scaled_weights = apply_vol_target(weights_series, realized_vol)
         target = target.assign(target_weight=target["symbol"].map(scaled_weights))
 
-        orders = compute_rebalance_orders(target, current_positions, account_equity, latest_quotes)
+        sizing_equity = account_equity
+        if STRATEGY.capital_budget > 0:
+            sizing_equity = min(account_equity, STRATEGY.capital_budget)
+            if account_equity > 1.5 * STRATEGY.capital_budget:
+                logger.warning(
+                    "Account equity $%.0f is well above the $%.0f budget - only the budget is traded, so the "
+                    "trial return (measured on the whole account) will understate it. Reset the paper account "
+                    "balance to the budget in the Alpaca dashboard.",
+                    account_equity, STRATEGY.capital_budget,
+                )
+        orders = compute_rebalance_orders(target, current_positions, sizing_equity, latest_quotes)
         logger.info("Planned %d orders (realized vol %.1f%%, target %.1f%%)", len(orders), realized_vol * 100, STRATEGY.target_annual_vol * 100)
 
         if not orders:
