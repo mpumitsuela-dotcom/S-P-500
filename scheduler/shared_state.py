@@ -3,7 +3,8 @@ Agent state shared between runners (GitHub Actions and your PC) through the
 `agent-state` git branch.
 
 What is shared: .state/ (trial clock, "already ran today" markers, KILL_SWITCH),
-trade_log.csv, TRADE_LOG.md, TRIAL_REPORT.md. Everything else (data cache,
+trade_log.csv, TRADE_LOG.md, TRIAL_REPORT.md, and reports/ (daily and 5-day
+reports plus the decision records behind them). Everything else (data cache,
 logs) stays local to each runner.
 
 Why git: a push only succeeds if the branch still points at the commit the
@@ -24,7 +25,7 @@ from pathlib import Path
 from config import PROJECT_ROOT, STATE_DIR
 
 STATE_BRANCH = os.environ.get("SP500_STATE_BRANCH", "agent-state")
-STATE_PATHS = (".state", "trade_log.csv", "TRADE_LOG.md", "TRIAL_REPORT.md")
+STATE_PATHS = (".state", "trade_log.csv", "TRADE_LOG.md", "TRIAL_REPORT.md", "reports")
 _GIT_IDENTITY = ["-c", "user.name=sp500-agent", "-c", "user.email=sp500-agent@users.noreply.github.com"]
 
 

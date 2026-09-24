@@ -81,6 +81,8 @@ execution/
   rebalancer.py                   Diffs current vs target, turnover-capped
   trial.py                          30-day trial start/baseline tracking
   rationale.py                       Plain-English "why" for every order
+  decisions.py                        Research snapshot behind every decision
+  daily_report.py                      Daily + 5-day reports (files + GitHub issues)
   trade_log.py                        Append-only trade log (CSV + Markdown)
   reporting.py                         Builds TRIAL_REPORT.md
 backtest/
@@ -98,7 +100,7 @@ scripts/
   run_pc.bat / install_pc_task.bat  Windows backup runner + Task Scheduler setup
 .github/workflows/
   trading-agent.yml          Unattended twice-daily schedule on GitHub Actions
-tests/                     77 tests, no network calls, run with `pytest`
+tests/                     89 tests, no network calls, run with `pytest`
 ```
 
 ## Safety guards (execution/guards.py)
@@ -252,6 +254,35 @@ decide how to proceed:
   rename `TRIAL_REPORT.md` first if you want to keep that exact snapshot.
 - To stop entirely: create `.state/KILL_SWITCH` on the `agent-state` branch (see "Safety guards" above).
 
+## Daily and 5-day reports
+
+After the close on every trading day (4:10-5:00pm ET), the agent writes a
+**daily report**. Every fifth trading day, it also writes a **5-day report**.
+Both are saved on the `agent-state` branch (`reports/daily/`,
+`reports/weekly/`) and posted as a **GitHub issue**, so GitHub emails them
+to you.
+
+- **Daily report:** account value and day change vs. the S&P 500 (SPY),
+  what each session did (or why it halted), then **"Why I bought"** and
+  **"Why I sold"**. Each trade shows the research behind it:
+  - its factor scores and S&P 500 rank
+  - company financials: P/E, P/B, return on equity, gross margin,
+    debt/equity (FMP)
+  - price trend: 12-month return, last month, volatility (Alpaca)
+  - the most influential **news headlines**, with links and tone (Finnhub)
+  - **analyst ratings**: strong buy through strong sell (Finnhub)
+
+  It ends with the holdings at the close.
+- **5-day report:** return vs. the S&P 500 over the five days, a day-by-day
+  table, what the research favoured (the main reason behind buys, sectors
+  bought, average analyst consensus and news tone of buys vs. sells), every
+  session's outcome, and every buy and sell with its full research.
+
+Behind the reports, `execution/decisions.py` records each decision with a
+snapshot of its research at the moment it was made
+(`reports/data/decisions.jsonl`). Writing that record can never stop or
+fail a trading session.
+
 ## Trade log & rationale
 
 Every order either session places is logged with a plain-English rationale
@@ -357,7 +388,7 @@ the mocked tests alone.
    clean, the whole factor -> portfolio -> execution -> metrics pipeline is
    wired correctly before you spend a single real API call.
 
-4. **Run the test suite** (77 tests, no network calls):
+4. **Run the test suite** (89 tests, no network calls):
    ```bash
    pytest -q
    ```
@@ -444,9 +475,7 @@ computer can be off.
 2. Repo **Settings -> Secrets and variables -> Actions**, add
    `ALPACA_API_KEY_ID`, `ALPACA_API_SECRET_KEY`, `FMP_API_KEY` and
    `FINNHUB_API_KEY` (use the Alpaca **Paper** keys).
-3. In the Alpaca paper dashboard, reset the paper account to **$10,000** so
-   it matches the budget (see below).
-4. **Actions -> trading-agent -> Run workflow.** A manual run first
+3. **Actions -> trading-agent -> Run workflow.** A manual run first
    runs `scripts/check_connections.py`, which tests every API with your keys
    and prints OK/FAIL for each. Fix any FAIL before relying on the schedule.
    You can run the same check locally: `python3 scripts/check_connections.py`.
@@ -498,13 +527,15 @@ in. On Mac/Linux, use cron instead:
 
 ### Budget
 
-`SP500_CAPITAL_BUDGET` (default $10,000) caps how much the agent trades.
-Positions are sized on `min(account equity, budget)`. Orders are for whole
-shares, so the workflow uses 15 positions of about $650 each instead of 30
-positions of about $330. At $330 per position, many S&P 500 stocks would
-round down to zero shares. Resetting the paper account to $10K matters
-because the trial report measures return on the whole account. On a
-$100K account with $10K invested, the return would look about 10x too small.
+The agent trades the whole paper account (about $100K): 30 positions, each
+capped at 6%. To trade less, set `SP500_CAPITAL_BUDGET` to a dollar amount
+in the workflow's `env:` block and your PC's `.env`. Positions are then
+sized on `min(account equity, budget)`. If you set a cap, also reset the
+paper account balance to the same amount. The trial report measures return
+on the whole account, so on a $100K account with $10K invested, the return
+would look about 10x too small. On a small budget, use fewer positions
+(`SP500_NUM_POSITIONS`), because orders are whole shares and many S&P 500
+stocks cost more than a few hundred dollars.
 
 GitHub Actions usage: roughly 36 short runs per trading day, about 800
 minutes a month. That fits the free 2,000 minutes for a private repo, and

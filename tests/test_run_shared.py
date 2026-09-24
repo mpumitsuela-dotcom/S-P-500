@@ -134,3 +134,29 @@ def test_empty_state_branch_is_handled(monkeypatch, clones):
     calls = []
     assert runner(monkeypatch, cloud, "primary", ny(9, 40), calls) == 0
     assert calls == [("cloud", "morning")]
+
+
+def test_report_runs_after_close_on_a_trading_day(monkeypatch, clones):
+    cloud, pc = clones
+    calls = []
+    runner(monkeypatch, cloud, "primary", ny(9, 40), calls)
+    # After 4pm Alpaca's clock says "closed" - that must not block the report.
+    assert runner(monkeypatch, cloud, "primary", ny(16, 20), calls, market_open=False) == 0
+    assert runner(monkeypatch, pc, "backup", ny(16, 45), calls) == 0  # already reported
+    assert calls == [("cloud", "morning"), ("cloud", "report")]
+
+
+def test_no_report_on_a_day_nothing_ran(monkeypatch, clones):
+    cloud, _ = clones
+    calls = []
+    assert runner(monkeypatch, cloud, "primary", ny(16, 20), calls) == 0
+    assert calls == []
+
+
+def test_backup_writes_report_if_primary_missed_it(monkeypatch, clones):
+    cloud, pc = clones
+    calls = []
+    runner(monkeypatch, cloud, "primary", ny(9, 40), calls)
+    assert runner(monkeypatch, pc, "backup", ny(16, 20), calls) == 0  # still in the primary's head start
+    assert runner(monkeypatch, pc, "backup", ny(16, 40), calls) == 0
+    assert calls == [("cloud", "morning"), ("pc", "report")]

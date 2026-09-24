@@ -27,7 +27,7 @@ from __future__ import annotations
 import os
 import socket
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, time as dtime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -43,11 +43,18 @@ LOCAL_KILL_SWITCH_NAME = "KILL_SWITCH"
 BACKUP_DELAY_MINUTES = int(os.environ.get("SP500_BACKUP_DELAY_MINUTES", "25"))
 MAX_CLAIM_ATTEMPTS = 3
 
+# After the close: the daily report (and every fifth trading day, the 5-day
+# report) - see execution/daily_report.py. Ends by 17:00 so the workflow's
+# last cron firing (21:52 UTC = 16:52 EST) still lands in it in winter.
+REPORT_WINDOW = (dtime(16, 10), dtime(17, 0))
+
 SESSIONS = {
     # session -> (marker file, window)
     "morning": ("last_morning_run_date", AM_WINDOW),
     "afternoon": ("last_afternoon_run_date", PM_WINDOW),
+    "report": ("last_report_run_date", REPORT_WINDOW),
 }
+TRADING_SESSIONS = ("morning", "afternoon")
 
 
 def _log(msg: str) -> None:
@@ -72,6 +79,15 @@ def due_sessions(root: Path, now_ny: datetime, role: str) -> list[str]:
         already_ran_afternoon_today=_ran_today(root, SESSIONS["afternoon"][0], today),
     )
     due = [s for s, flag in (("morning", d.run_morning), ("afternoon", d.run_afternoon)) if flag]
+    # Report only on days a trading session actually ran (skips weekends and holidays).
+    traded_today = any(_ran_today(root, SESSIONS[s][0], today) for s in TRADING_SESSIONS)
+    if (
+        now_ny.weekday() < 5
+        and REPORT_WINDOW[0] <= now_ny.time() <= REPORT_WINDOW[1]
+        and traded_today
+        and not _ran_today(root, SESSIONS["report"][0], today)
+    ):
+        due.append("report")
     if role == "backup":
         held = [s for s in due if _in_backup_hold(now_ny, SESSIONS[s][1])]
         if held:
@@ -81,6 +97,10 @@ def due_sessions(root: Path, now_ny: datetime, role: str) -> list[str]:
 
 
 def _run_session(name: str) -> int:
+    if name == "report":
+        from execution import daily_report
+
+        return daily_report.run_end_of_day(datetime.now(NY_TZ).date())
     if name == "morning":
         import scheduler.run_morning as mod
     else:
@@ -121,9 +141,11 @@ def main(root: Path = PROJECT_ROOT, now_ny: datetime | None = None, run_session=
         if not due:
             _log("nothing due (outside windows, or already ran today)")
             return 0
-        if not market_open():
-            _log("Alpaca clock says the market is closed (holiday?) - skipping")
-            return 0
+        if any(s in TRADING_SESSIONS for s in due) and not market_open():
+            _log("Alpaca clock says the market is closed (holiday?) - skipping trading")
+            due = [s for s in due if s not in TRADING_SESSIONS]
+            if not due:
+                return 0
 
         for s in due:
             (root / ".state" / SESSIONS[s][0]).write_text(today)
@@ -140,7 +162,11 @@ def main(root: Path = PROJECT_ROOT, now_ny: datetime | None = None, run_session=
     rc = 0
     for s in claimed:
         _log(f"running {s} session")
-        rc = max(rc, run_session(s))
+        try:
+            rc = max(rc, run_session(s))
+        except Exception as exc:  # noqa: BLE001 - still publish whatever state exists
+            _log(f"{s} session raised: {exc!r}")
+            rc = max(rc, 1)
 
     # Publish the trade log and state. Only the claimant writes during a
     # session, so if the push races anything, our files win.

@@ -4,7 +4,7 @@
 # covers both EDT and EST). Every firing runs scheduler/run_shared.py, which
 # decides from real New York time whether to run the AM session (9:30-10:35 ET,
 # the first hour after the open), the PM session (2:55-4:00 ET, into the close),
-# or nothing. Each session runs at most once per day, so the
+# the end-of-day report (4:10-5:00 ET, after the close), or nothing. Each session runs at most once per day, so the
 # extra firings do nothing.
 #
 # This is the PRIMARY runner. Your PC can run the same schedule as a BACKUP
@@ -28,17 +28,16 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: write   # push shared state to the agent-state branch
+  issues: write     # post the daily and 5-day reports as issues (GitHub emails them)
 
 concurrency:
   group: trading-agent
   cancel-in-progress: false
 
 env:
-  # $10K budget: fewer, larger positions so whole-share orders still fill.
-  SP500_CAPITAL_BUDGET: "10000"
-  SP500_NUM_POSITIONS: "15"
-  SP500_MAX_POSITION_WEIGHT: "0.08"
+  # Trade the whole paper account (0 = no cap), 30 positions, max 6% each.
+  SP500_CAPITAL_BUDGET: "0"
   ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
   ALPACA_API_SECRET_KEY: ${{ secrets.ALPACA_API_SECRET_KEY }}
   ALPACA_BASE_URL: https://paper-api.alpaca.markets
@@ -75,6 +74,7 @@ jobs:
         env:
           SP500_RUNNER_ROLE: primary
           SP500_RUNNER_NAME: github-actions
+          GITHUB_TOKEN: ${{ github.token }}
         run: python scheduler/run_shared.py
 
       - name: Upload logs
