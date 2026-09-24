@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import date
+from datetime import date, datetime
 
 from execution import daily_report, decisions
 
@@ -41,12 +41,18 @@ def _run_link() -> str:
     return f"{server}/{repo}/actions/runs/{run_id}" if server and repo and run_id else ""
 
 
-def build_alert(day: date, runner: str, sessions: list[str], rc: int, note: str = "") -> tuple[str, str] | None:
-    """Returns (title, body) when today's claimed sessions need attention, else None."""
+def build_alert(
+    day: date, runner: str, sessions: list[str], rc: int, note: str = "", since: datetime | None = None
+) -> tuple[str, str] | None:
+    """Returns (title, body) when this run's sessions need attention, else None.
+    since: only session records written at/after this time count, so an
+    earlier failure the same day (already alerted, since fixed) isn't
+    re-reported by a later successful run."""
     codes = [SESSION_CODES[s] for s in sessions if SESSION_CODES.get(s)]
     records = [
         r for r in decisions.read_records(day, day)
         if r.get("type") == "session" and r.get("session") in codes and r.get("outcome") in ("halted", "crashed")
+        and (since is None or datetime.fromisoformat(r["timestamp"]) >= since.replace(microsecond=0))
     ]
     if not records and rc == 0 and not note:
         return None
@@ -92,10 +98,10 @@ def build_alert(day: date, runner: str, sessions: list[str], rc: int, note: str 
     return title, "\n".join(lines)
 
 
-def alert_if_needed(day: date, runner: str, sessions: list[str], rc: int, note: str = "") -> None:
+def alert_if_needed(day: date, runner: str, sessions: list[str], rc: int, note: str = "", since: datetime | None = None) -> None:
     """Never raises: an alert failure must not change the run's outcome."""
     try:
-        alert = build_alert(day, runner, sessions, rc, note)
+        alert = build_alert(day, runner, sessions, rc, note, since)
         if alert:
             title, body = alert
             logger.warning(title)
