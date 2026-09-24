@@ -71,7 +71,10 @@ def _in_backup_hold(now_ny: datetime, window) -> bool:
     return now_ny < start + timedelta(minutes=BACKUP_DELAY_MINUTES)
 
 
-def due_sessions(root: Path, now_ny: datetime, role: str) -> list[str]:
+def due_sessions(root: Path, now_ny: datetime, role: str, force: str = "") -> list[str]:
+    """force: run this session now even outside its window (owner-requested
+    catch-up via the workflow's "force_session" input). It still runs at most
+    once a day and still passes every guard, including market hours."""
     today = now_ny.date().isoformat()
     d = decide(
         now_ny,
@@ -93,6 +96,9 @@ def due_sessions(root: Path, now_ny: datetime, role: str) -> list[str]:
         if held:
             _log(f"backup runner: giving the primary until +{BACKUP_DELAY_MINUTES} min for {', '.join(held)}")
         due = [s for s in due if s not in held]
+    if force in SESSIONS and force not in due and now_ny.weekday() < 5 and not _ran_today(root, SESSIONS[force][0], today):
+        _log(f"forced run of the {force} session (outside its window, on request)")
+        due.append(force)
     return due
 
 
@@ -149,7 +155,7 @@ def main(
             _log(f"cannot load shared state, not trading: {exc}")
             return 1
 
-        due = due_sessions(root, now_ny, role)
+        due = due_sessions(root, now_ny, role, os.environ.get("SP500_FORCE_SESSION", "").strip().lower())
         if not due:
             _log("nothing due (outside windows, or already ran today)")
             return 0

@@ -26,6 +26,12 @@ on:
   schedule:
     - cron: "7,22,37,52 13-21 * * 1-5"
   workflow_dispatch:
+    inputs:
+      force_session:
+        description: "Run this session now even outside its time window (still once a day, still all safety checks)"
+        type: choice
+        default: none
+        options: [none, morning, afternoon, report]
 
 permissions:
   contents: write   # push shared state to the agent-state branch
@@ -74,6 +80,7 @@ jobs:
         env:
           SP500_RUNNER_ROLE: primary
           SP500_RUNNER_NAME: github-actions
+          SP500_FORCE_SESSION: ${{ github.event.inputs.force_session || 'none' }}
           GITHUB_TOKEN: ${{ github.token }}
         run: python scheduler/run_shared.py
 
