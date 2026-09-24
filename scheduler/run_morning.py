@@ -90,6 +90,66 @@ def _record_safely(logger, fn, *args, **kwargs) -> None:
         logger.warning("Could not write decision record:\n%s", traceback.format_exc())
 
 
+# Caps the extra API calls: each round fetches only the target names still missing research.
+RESEARCH_FETCH_ROUNDS = 5
+
+
+def _symbols_in(frame: pd.DataFrame | None) -> set[str]:
+    return set(frame["symbol"]) if frame is not None and not frame.empty and "symbol" in frame.columns else set()
+
+
+def _research_before_buying(logger, prices, sector_map, fundamentals, research, latest_quotes, held: set[str]):
+    """
+    The free-tier budgets only refresh fundamentals/research for a batch of the
+    universe each run, so a stock outside today's batch would score neutral on
+    research and could still be bought on price momentum alone. This:
+
+      1. fetches the missing fundamentals + news/analyst research for every
+         name the target portfolio wants, then re-ranks (new research can
+         change the ranking and pull in other names), repeating for names
+         not yet tried - up to RESEARCH_FETCH_ROUNDS fetches;
+      2. excludes any name that is not already held and still has no research
+         (its fetch failed, or the round cap was hit), re-ranking until every
+         name the portfolio would newly buy has been researched. Nothing is
+         bought blind.
+
+    Returns (scores, fundamentals, research, excluded_symbols).
+    """
+    excluded: set[str] = set()
+
+    def rank():
+        sc = compute_combined_scores(prices, sector_map, fundamentals=fundamentals, research=research)
+        return sc[sc.index.isin(latest_quotes.index) & ~sc.index.isin(excluded)]
+
+    def unresearched(scores):
+        wanted = build_target_portfolio(scores, sector_map)["symbol"]
+        have_f, have_r = _symbols_in(fundamentals), _symbols_in(research)
+        return {s for s in wanted if s not in have_f or s not in have_r}
+
+    attempted: set[str] = set()
+    fetch_rounds = 0
+    while True:
+        missing = unresearched(rank())
+        to_fetch = missing - attempted
+        if to_fetch and fetch_rounds < RESEARCH_FETCH_ROUNDS:
+            fetch_rounds += 1
+            attempted |= to_fetch
+            miss_f = sorted(s for s in to_fetch if s not in _symbols_in(fundamentals))
+            miss_r = sorted(s for s in to_fetch if s not in _symbols_in(research))
+            logger.info("Researching before buying - fundamentals: %s; news/analysts: %s", miss_f, miss_r)
+            if miss_f:
+                fundamentals = pd.concat([fundamentals, get_fundamentals_frame(miss_f, max_new_symbols=len(miss_f))], ignore_index=True)
+            if miss_r:
+                research = pd.concat([research, get_research_frame(miss_r, max_new_symbols=len(miss_r))], ignore_index=True)
+            continue  # re-rank with the new research
+        blind = missing - held
+        if not blind:
+            break
+        logger.warning("No research available for %s - excluded from new buys this run", sorted(blind))
+        excluded |= blind
+    return rank(), fundamentals, research, sorted(excluded)
+
+
 def main() -> int:
     logger = setup_logging("run_morning")
     logger.info("=== AM session start ===")
@@ -137,6 +197,10 @@ def main() -> int:
 
         run_all_guards([check_universe_coverage(scores, sector_map)])
 
+        scores, fundamentals, research, unresearched = _research_before_buying(
+            logger, prices, sector_map, fundamentals, research, latest_quotes, set(current_positions)
+        )
+
         target = build_target_portfolio(scores, sector_map)
         weights_series = target.set_index("symbol")["target_weight"]
         realized_vol = estimate_portfolio_volatility(prices, weights_series)
@@ -165,7 +229,7 @@ def main() -> int:
             _record_safely(
                 logger, decisions.record_session, "AM", "no_trades",
                 "Portfolio was already close to the research-ranked target; no position drifted enough to trade.",
-                equity=account_equity, target=target_summary,
+                equity=account_equity, target=target_summary, excluded_unresearched=unresearched,
             )
         else:
             # Rationale for every order, before execution, so it's logged even if a later order in the batch errors.
@@ -189,7 +253,7 @@ def main() -> int:
             _record_safely(logger, decisions.record_trades, "AM", results, snapshots, latest_quotes)
             _record_safely(
                 logger, decisions.record_session, "AM", "completed", f"{len(results)} order(s) placed",
-                equity=account_equity, target=target_summary,
+                equity=account_equity, target=target_summary, excluded_unresearched=unresearched,
             )
 
         logger.info("=== AM session complete ===")

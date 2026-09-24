@@ -37,6 +37,7 @@ def runner(monkeypatch, root, role, now, calls, market_open=True):
         now_ny=now,
         run_session=lambda s: calls.append((root.name, s)) or 0,
         market_open=lambda: market_open,
+        alert=lambda *a, **k: None,
     )
 
 
@@ -91,7 +92,7 @@ def test_trade_log_from_one_runner_reaches_the_other(monkeypatch, clones):
         return 0
 
     monkeypatch.setenv("SP500_RUNNER_ROLE", "primary")
-    run_shared.main(root=cloud, now_ny=ny(9, 40), run_session=session, market_open=lambda: True)
+    run_shared.main(root=cloud, now_ny=ny(9, 40), run_session=session, market_open=lambda: True, alert=lambda *a, **k: None)
     shared_state.pull(pc)
     assert (pc / "trade_log.csv").read_text() == "row from cloud\n"
 
@@ -160,3 +161,18 @@ def test_backup_writes_report_if_primary_missed_it(monkeypatch, clones):
     assert runner(monkeypatch, pc, "backup", ny(16, 20), calls) == 0  # still in the primary's head start
     assert runner(monkeypatch, pc, "backup", ny(16, 40), calls) == 0
     assert calls == [("cloud", "morning"), ("pc", "report")]
+
+
+def test_failed_session_raises_an_alert(monkeypatch, clones):
+    cloud, _ = clones
+    alerts = []
+    monkeypatch.setenv("SP500_RUNNER_ROLE", "primary")
+    monkeypatch.setenv("SP500_RUNNER_NAME", "cloud")
+
+    def crash(s):
+        raise RuntimeError("boom")
+
+    rc = run_shared.main(root=cloud, now_ny=ny(9, 40), run_session=crash, market_open=lambda: True,
+                         alert=lambda *a: alerts.append(a))
+    assert rc == 1
+    assert alerts == [(ny(9, 40).date(), "cloud", ["morning"], 1, "The morning step raised RuntimeError('boom').")]

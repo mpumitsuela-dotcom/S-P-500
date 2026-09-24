@@ -246,7 +246,13 @@ def _session_lines(records: list[dict]) -> list[str]:
     out = []
     for r in records:
         if r.get("type") == "session":
-            out.append(f"- **{r['date']} {names.get(r['session'], r['session'])}:** {labels.get(r['outcome'], r['outcome'])} — {r.get('detail', '')}")
+            line = f"- **{r['date']} {names.get(r['session'], r['session'])}:** {labels.get(r['outcome'], r['outcome'])} — {r.get('detail', '')}"
+            if r.get("excluded_unresearched"):
+                line += (
+                    f" Not bought because no research could be fetched for them: "
+                    f"{', '.join(r['excluded_unresearched'])}."
+                )
+            out.append(line)
     return out
 
 
@@ -376,10 +382,13 @@ def publish_issue(title: str, body: str, rel_path: str, label: str) -> None:
         return
     from scheduler.shared_state import STATE_BRANCH
 
-    link = f"https://github.com/{repo}/blob/{STATE_BRANCH}/{rel_path}"
-    if len(body) > ISSUE_BODY_LIMIT:
-        body = body[:ISSUE_BODY_LIMIT] + f"\n\n…(truncated — full report: {link})"
-    body += f"\n\n---\nSaved at [{rel_path}]({link})."
+    if rel_path:
+        link = f"https://github.com/{repo}/blob/{STATE_BRANCH}/{rel_path}"
+        if len(body) > ISSUE_BODY_LIMIT:
+            body = body[:ISSUE_BODY_LIMIT] + f"\n\n…(truncated — full report: {link})"
+        body += f"\n\n---\nSaved at [{rel_path}]({link})."
+    elif len(body) > ISSUE_BODY_LIMIT:
+        body = body[:ISSUE_BODY_LIMIT] + "\n\n…(truncated)"
     url = f"https://api.github.com/repos/{repo}/issues"
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
     payload = {"title": title, "body": body, "labels": [label]}
