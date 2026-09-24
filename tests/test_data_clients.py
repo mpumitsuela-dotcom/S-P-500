@@ -94,3 +94,34 @@ def test_finnhub_auth_error_is_not_retried(monkeypatch):
     with pytest.raises(requests.HTTPError):
         finnhub_data._get("/company-news", {"symbol": "AAPL"})
     assert len(calls) == 1
+
+
+def test_uncovered_symbols_do_not_break_scoring(monkeypatch):
+    """Crash on 2026-09-24: None fundamentals made object-dtype columns and pandas 3
+    refused to write float z-scores back (TypeError in sector_neutral_zscore)."""
+    from research.factors import compute_quality_factor, compute_value_factor
+
+    def fake_get(url, params, timeout):
+        i = int(params["symbol"][1:])
+        if i >= 8:
+            return Resp(402, text=PREMIUM)
+        return Resp(200, [{"priceToEarningsRatioTTM": 10.0 + i, "priceToBookRatioTTM": 2.0 + i,
+                           "returnOnEquityTTM": 0.1 * i, "grossProfitMarginTTM": 0.3, "debtToEquityRatioTTM": 1.0}])
+
+    monkeypatch.setattr(fmp_data.requests, "get", fake_get)
+    symbols = [f"S{i}" for i in range(12)]
+    sector_map = {s: "Tech" if i < 6 else "Energy" for i, s in enumerate(symbols)}
+    frame = fmp_data.get_fundamentals_frame(symbols, max_new_symbols=20)
+    assert frame["pe"].dtype.kind == "f"
+    value = compute_value_factor(frame, sector_map)
+    quality = compute_quality_factor(frame, sector_map)
+    assert value.notna().all() and quality.notna().all()
+
+
+def test_scoring_tolerates_object_columns():
+    """Belt and braces: an object column with None (e.g. research analyst_score) still scores."""
+    from research.scoring import sector_neutral_zscore
+
+    df = pd.DataFrame({"x": [1.0, 2.0, None, 4.0, 5.0, None], "sector": ["A"] * 3 + ["B"] * 3}, dtype=object)
+    out = sector_neutral_zscore(df, "x")
+    assert out.dtype.kind == "f" and out.notna().all()
