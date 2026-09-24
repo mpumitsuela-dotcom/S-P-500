@@ -35,10 +35,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # $10K budget: fewer, larger positions so whole-share orders still fill.
-  SP500_CAPITAL_BUDGET: "10000"
-  SP500_NUM_POSITIONS: "15"
-  SP500_MAX_POSITION_WEIGHT: "0.08"
+  # Trade the whole paper account (0 = no cap), 30 positions, max 6% each.
+  SP500_CAPITAL_BUDGET: "0"
   ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
   ALPACA_API_SECRET_KEY: ${{ secrets.ALPACA_API_SECRET_KEY }}
   ALPACA_BASE_URL: https://paper-api.alpaca.markets

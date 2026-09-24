@@ -444,9 +444,7 @@ computer can be off.
 2. Repo **Settings -> Secrets and variables -> Actions**, add
    `ALPACA_API_KEY_ID`, `ALPACA_API_SECRET_KEY`, `FMP_API_KEY` and
    `FINNHUB_API_KEY` (use the Alpaca **Paper** keys).
-3. In the Alpaca paper dashboard, reset the paper account to **$10,000** so
-   it matches the budget (see below).
-4. **Actions -> trading-agent -> Run workflow.** A manual run first
+3. **Actions -> trading-agent -> Run workflow.** A manual run first
    runs `scripts/check_connections.py`, which tests every API with your keys
    and prints OK/FAIL for each. Fix any FAIL before relying on the schedule.
    You can run the same check locally: `python3 scripts/check_connections.py`.
@@ -498,13 +496,15 @@ in. On Mac/Linux, use cron instead:
 
 ### Budget
 
-`SP500_CAPITAL_BUDGET` (default $10,000) caps how much the agent trades.
-Positions are sized on `min(account equity, budget)`. Orders are for whole
-shares, so the workflow uses 15 positions of about $650 each instead of 30
-positions of about $330. At $330 per position, many S&P 500 stocks would
-round down to zero shares. Resetting the paper account to $10K matters
-because the trial report measures return on the whole account. On a
-$100K account with $10K invested, the return would look about 10x too small.
+The agent trades the whole paper account (about $100K): 30 positions, each
+capped at 6%. To trade less, set `SP500_CAPITAL_BUDGET` to a dollar amount
+in the workflow's `env:` block and your PC's `.env`. Positions are then
+sized on `min(account equity, budget)`. If you set a cap, also reset the
+paper account balance to the same amount. The trial report measures return
+on the whole account, so on a $100K account with $10K invested, the return
+would look about 10x too small. On a small budget, use fewer positions
+(`SP500_NUM_POSITIONS`), because orders are whole shares and many S&P 500
+stocks cost more than a few hundred dollars.
 
 GitHub Actions usage: roughly 36 short runs per trading day, about 800
 minutes a month. That fits the free 2,000 minutes for a private repo, and

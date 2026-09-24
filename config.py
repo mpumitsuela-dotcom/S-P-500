@@ -106,7 +106,7 @@ class StrategyConfig:
     # min(account equity, this). 0 means "use the whole account". Set the Alpaca
     # paper account's balance to the same amount so the trial report's return
     # (measured on account equity) reflects what was actually traded.
-    capital_budget: float = float(os.environ.get("SP500_CAPITAL_BUDGET", "10000"))
+    capital_budget: float = float(os.environ.get("SP500_CAPITAL_BUDGET", "0"))
 
 
 API_KEYS = APIKeys()
