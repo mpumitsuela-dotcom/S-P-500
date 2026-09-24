@@ -77,18 +77,35 @@ class FMPQuotaExceeded(Exception):
     """
 
 
+class FMPSymbolNotCovered(Exception):
+    """
+    402 "Premium Query Parameter ... not available under your current
+    subscription": the free plan doesn't cover THIS symbol. Other symbols
+    still work, so this must not trip the quota circuit breaker (it did, and
+    stopped all fundamentals fetching after the first uncovered symbol -
+    confirmed live on 2026-09-24).
+    """
+
+
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=1, max=10),
-    retry=retry_if_not_exception_type(FMPQuotaExceeded),
+    retry=retry_if_not_exception_type((FMPQuotaExceeded, FMPSymbolNotCovered)),
 )
 def _get(path: str, symbol: str, params: dict | None = None) -> list | dict:
     params = {**(params or {}), "symbol": symbol, "apikey": API_KEYS.fmp_key}
     resp = requests.get(f"{BASE_URL}{path}", params=params, timeout=20)
+    if resp.status_code == 402 and ("not available under your current subscription" in resp.text or "Premium Query Parameter" in resp.text):
+        raise FMPSymbolNotCovered(f"{symbol} not covered by the FMP plan")
     if resp.status_code in (402, 429):
         raise FMPQuotaExceeded(f"{resp.status_code}: {resp.text[:200]}")
     resp.raise_for_status()  # a genuine 4xx/5xx here still retries (transient network/server issues)
     return resp.json()
+
+
+# Cached marker for "the plan doesn't cover this symbol": the row is kept (so
+# the symbol counts as looked-up) with no values (neutral value/quality score).
+NOT_COVERED = {"_fmp_not_covered": True}
 
 
 def get_key_metrics_ttm(symbol: str) -> dict:
@@ -97,7 +114,10 @@ def get_key_metrics_ttm(symbol: str) -> dict:
         raise RuntimeError("FMP_API_KEY not set - see .env.example")
 
     def fetch():
-        data = _get("/key-metrics-ttm", symbol)
+        try:
+            data = _get("/key-metrics-ttm", symbol)
+        except FMPSymbolNotCovered:
+            return NOT_COVERED  # cached like any result, so it isn't re-asked for a week
         return data[0] if isinstance(data, list) and data else {}
 
     return cached_call("fmp_key_metrics", symbol, FUNDAMENTALS_TTL_SECONDS, fetch)
@@ -109,7 +129,10 @@ def get_ratios_ttm(symbol: str) -> dict:
         raise RuntimeError("FMP_API_KEY not set - see .env.example")
 
     def fetch():
-        data = _get("/ratios-ttm", symbol)
+        try:
+            data = _get("/ratios-ttm", symbol)
+        except FMPSymbolNotCovered:
+            return NOT_COVERED
         return data[0] if isinstance(data, list) and data else {}
 
     return cached_call("fmp_ratios", symbol, FUNDAMENTALS_TTL_SECONDS, fetch)
@@ -164,7 +187,10 @@ def get_fundamentals_frame(symbols: list[str], max_new_symbols: int | None = Non
         if quota_exhausted.is_set():
             return None  # don't even attempt - a sibling worker already confirmed the quota is gone
         try:
-            return _row_from(sym, get_key_metrics_ttm(sym), get_ratios_ttm(sym))
+            km = get_key_metrics_ttm(sym)
+            if km.get("_fmp_not_covered"):
+                return _row_from(sym, {}, {})  # skip the second call: same answer
+            return _row_from(sym, km, get_ratios_ttm(sym))
         except FMPQuotaExceeded as exc:
             quota_exhausted.set()
             logger.warning("FMP quota/plan limit hit on %s - stopping further fetches this run: %s", sym, exc)
