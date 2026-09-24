@@ -176,3 +176,20 @@ def test_failed_session_raises_an_alert(monkeypatch, clones):
                          alert=lambda *a: alerts.append(a))
     assert rc == 1
     assert alerts == [(ny(9, 40).date(), "cloud", ["morning"], 1, "The morning step raised RuntimeError('boom').")]
+
+
+def test_forced_session_runs_outside_window_once(monkeypatch, clones):
+    cloud, _ = clones
+    calls = []
+    monkeypatch.setenv("SP500_FORCE_SESSION", "morning")
+    assert runner(monkeypatch, cloud, "primary", ny(11, 15), calls) == 0
+    assert runner(monkeypatch, cloud, "primary", ny(11, 30), calls) == 0  # still only once a day
+    assert calls == [("cloud", "morning")]
+
+
+def test_forced_session_still_respects_market_closed(monkeypatch, clones):
+    cloud, _ = clones
+    calls = []
+    monkeypatch.setenv("SP500_FORCE_SESSION", "morning")
+    assert runner(monkeypatch, cloud, "primary", ny(11, 15), calls, market_open=False) == 0
+    assert calls == []
