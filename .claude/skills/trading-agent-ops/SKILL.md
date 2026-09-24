@@ -23,7 +23,7 @@ Write to the owner in short, plain sentences, with no jargon. Money in dollars, 
 
 ## How it runs
 
-- `.github/workflows/trading-agent.yml` fires every 15 min on weekdays in market hours and runs `scheduler/run_shared.py` as the **primary** runner. The owner's PC may run the same script as the **backup** (`scripts/run_pc.bat`, 25 min head start for the cloud).
+- `.github/workflows/trading-agent.yml` fires every 15 min on weekdays in market hours and runs `scheduler/run_shared.py` as the **primary** runner. GitHub's cron is unreliable, so Claude routines ("Trading agent: kick …") also start the workflow at 9:45, 15:10 and 16:25 ET. The owner's PC may run the same script as the **backup** (`scripts/run_pc.bat`, 25 min head start for the cloud).
 - `run_shared.py` pulls shared state from the **`agent-state` branch** and claims a session by pushing a marker *before* acting. The git push compare-and-swap is what stops double-trading. Then it runs whichever slot is due:
   - **morning** 9:30–10:35 ET → `scheduler/run_morning.py`: the full research-ranked rebalance. It researches every target name before buying (`_research_before_buying`), and names with no research aren't newly bought.
   - **afternoon** 2:55–4:00 ET → `scheduler/run_afternoon.py`: a risk check only. It trims 50% of a holding only when it has negative news AND is down ≥3% since entry.
