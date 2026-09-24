@@ -102,13 +102,16 @@ def _research_before_buying(logger, prices, sector_map, fundamentals, research, 
     """
     The free-tier budgets only refresh fundamentals/research for a batch of the
     universe each run, so a stock outside today's batch would score neutral on
-    research and could still be bought on price momentum alone. This:
+    research and could still be bought on price momentum alone. "Research"
+    here means Finnhub news + analyst ratings; FMP fundamentals are fetched
+    too but aren't required, because the free FMP plan doesn't cover every
+    stock. This:
 
       1. fetches the missing fundamentals + news/analyst research for every
          name the target portfolio wants, then re-ranks (new research can
          change the ranking and pull in other names), repeating for names
          not yet tried - up to RESEARCH_FETCH_ROUNDS fetches;
-      2. excludes any name that is not already held and still has no research
+      2. excludes any name that is not already held and still has no news/analyst research
          (its fetch failed, or the round cap was hit), re-ranking until every
          name the portfolio would newly buy has been researched. Nothing is
          bought blind.
@@ -121,15 +124,25 @@ def _research_before_buying(logger, prices, sector_map, fundamentals, research, 
         sc = compute_combined_scores(prices, sector_map, fundamentals=fundamentals, research=research)
         return sc[sc.index.isin(latest_quotes.index) & ~sc.index.isin(excluded)]
 
-    def unresearched(scores):
+    def unfetched(scores):
+        """Target names missing fundamentals or research - both get fetched."""
         wanted = build_target_portfolio(scores, sector_map)["symbol"]
         have_f, have_r = _symbols_in(fundamentals), _symbols_in(research)
         return {s for s in wanted if s not in have_f or s not in have_r}
 
+    def unresearched(scores):
+        """Target names with no news/analyst research. Only this blocks a buy:
+        FMP's free plan doesn't cover every stock, so missing fundamentals
+        just means a neutral value/quality score."""
+        wanted = build_target_portfolio(scores, sector_map)["symbol"]
+        have_r = _symbols_in(research)
+        return {s for s in wanted if s not in have_r}
+
     attempted: set[str] = set()
     fetch_rounds = 0
     while True:
-        missing = unresearched(rank())
+        ranked = rank()
+        missing = unfetched(ranked)
         to_fetch = missing - attempted
         if to_fetch and fetch_rounds < RESEARCH_FETCH_ROUNDS:
             fetch_rounds += 1
@@ -142,7 +155,7 @@ def _research_before_buying(logger, prices, sector_map, fundamentals, research, 
             if miss_r:
                 research = pd.concat([research, get_research_frame(miss_r, max_new_symbols=len(miss_r))], ignore_index=True)
             continue  # re-rank with the new research
-        blind = missing - held
+        blind = unresearched(ranked) - held
         if not blind:
             break
         logger.warning("No research available for %s - excluded from new buys this run", sorted(blind))

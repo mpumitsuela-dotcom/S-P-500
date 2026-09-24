@@ -26,12 +26,13 @@ import logging
 import os
 import re
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta
 
 import pandas as pd
 import requests
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from config import API_KEYS
 from data.cache import cached_call, is_fresh
@@ -71,12 +72,45 @@ _NEGATIVE_WORDS = {
 _WORD_RE = re.compile(r"[a-z]+")
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
+# Every Finnhub call in the process goes through one shared limiter, so the
+# thread pools below can't burst past the free tier's 60 requests/minute.
+# Without it, 6 workers x 2 calls/symbol hit the limit within seconds and
+# almost every research fetch failed (confirmed live on 2026-09-24).
+CALLS_PER_MINUTE = float(os.environ.get("FINNHUB_CALLS_PER_MINUTE", "50"))
+_rate_lock = threading.Lock()
+_next_call_at = 0.0
+
+
+def _throttle() -> None:
+    global _next_call_at
+    if CALLS_PER_MINUTE <= 0:
+        return
+    with _rate_lock:
+        now = time.monotonic()
+        wait = _next_call_at - now
+        _next_call_at = max(now, _next_call_at) + 60.0 / CALLS_PER_MINUTE
+    if wait > 0:
+        time.sleep(wait)
+
+
+class FinnhubRateLimited(RuntimeError):
+    pass
+
+
+@retry(
+    stop=stop_after_attempt(4),
+    # A 429 means the minute's budget is spent: wait it out rather than
+    # retrying within a second or two, which only burns more of it.
+    wait=wait_exponential(multiplier=5, min=10, max=60),
+    retry=retry_if_exception_type((FinnhubRateLimited, requests.ConnectionError, requests.Timeout)),
+    reraise=True,
+)
 def _get(path: str, params: dict) -> list | dict:
     params = {**params, "token": API_KEYS.finnhub_key}
+    _throttle()
     resp = requests.get(f"{BASE_URL}{path}", params=params, timeout=20)
     if resp.status_code == 429:
-        raise RuntimeError("Finnhub rate-limited (429) - free tier is 60 req/min")
+        raise FinnhubRateLimited("Finnhub rate-limited (429) - free tier is 60 req/min")
     resp.raise_for_status()
     return resp.json()
 

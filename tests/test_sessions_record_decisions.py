@@ -152,3 +152,16 @@ def test_every_new_buy_is_researched_first(market, monkeypatch):
     assert bought <= researched
     session = [r for r in _records(tmp_path) if r["type"] == "session"][-1]
     assert set(session["excluded_unresearched"]) <= unresearchable
+
+
+def test_missing_fundamentals_alone_does_not_block_a_buy(market, monkeypatch):
+    """FMP's free plan doesn't cover every stock; news + analyst research is what's required."""
+    tmp_path, symbols, research, _ = market
+    no_fmp = pd.DataFrame(columns=["symbol", "pe", "pb", "roe", "gross_margin", "debt_to_equity", "earnings_growth"])
+    monkeypatch.setattr(run_morning, "get_fundamentals_frame", lambda syms, **k: no_fmp)
+    broker = FakeBroker()
+    monkeypatch.setattr(run_morning, "AlpacaBroker", lambda: broker)
+    assert run_morning.main() == 0
+    assert len([o for o in broker.orders if o[2] == "buy"]) >= 5  # capped by the 35% per-session turnover limit
+    session = [r for r in _records(tmp_path) if r["type"] == "session"][-1]
+    assert session["excluded_unresearched"] == []
