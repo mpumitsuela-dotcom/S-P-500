@@ -7,14 +7,14 @@ at exactly the right moment (fragile: depends on the triggering machine's
 configured timezone matching an assumption made once, and breaks across US
 daylight-saving transitions), this script is designed to be invoked
 REPEATEDLY - on an hourly cadence is enough - all day, every day, by
-whatever fires it (in this build: a Cowork scheduled task that runs on the
-user's linked computer). It does its own timezone-aware check against real
-NY market time (via zoneinfo, which handles DST automatically) and only
+whatever fires it (in this build: .github/workflows/trading-agent.yml,
+GitHub Actions on a 15-minute cron during market hours). It does its own
+timezone-aware check against real NY market time (via zoneinfo, which handles DST automatically) and only
 actually runs the AM or PM job once each, on days the market is open,
 inside a target window - regardless of what timezone/UTC-offset the
 triggering schedule itself was set up in.
 
-Window width vs. trigger cadence: the actual trigger fires roughly hourly
+Window width vs. trigger cadence: the trigger may fire as rarely as hourly
 (see project docs / the scheduled task's cron expression). A once-per-hour
 cadence lands somewhere different within each clock hour depending on the
 cron's exact minute, and a fixed UTC cron drifts by a full hour relative to
@@ -91,6 +91,19 @@ def _mark_ran(marker_name: str, today_str: str) -> None:
     (STATE_DIR / marker_name).write_text(today_str)
 
 
+def _market_open_per_alpaca() -> bool:
+    """Ask Alpaca's clock whether the market is open right now. Catches exchange
+    holidays and early closes, which decide() (weekday + time only) can't see.
+    If the clock can't be reached, assume open and let the per-session guards
+    decide - they fail closed on their own."""
+    try:
+        from execution.alpaca_broker import AlpacaBroker
+        return AlpacaBroker().is_market_open()
+    except Exception as exc:  # noqa: BLE001 - never let the pre-check crash dispatch
+        print(f"[dispatcher] could not reach Alpaca clock ({exc}); deferring to session guards")
+        return True
+
+
 def main() -> int:
     now_ny = datetime.now(NY_TZ)
     today_str = now_ny.date().isoformat()
@@ -104,17 +117,25 @@ def main() -> int:
     )
     print(f"[dispatcher] {decision.reason}")
 
+    if (decision.run_morning or decision.run_afternoon) and not _market_open_per_alpaca():
+        # Not marked as ran: nothing happened, and a holiday needs no retry anyway.
+        print("[dispatcher] Alpaca clock says the market is closed (holiday?) - skipping")
+        return 0
+
+    # Worst exit code of the sessions that ran (0 ok, 2 guard halt, 1 crash), so
+    # the scheduler that fired us shows a failure instead of a silent green run.
+    rc = 0
     if decision.run_morning:
         import scheduler.run_morning as run_morning
-        run_morning.main()
+        rc = max(rc, run_morning.main() or 0)
         _mark_ran("last_morning_run_date", today_str)
 
     if decision.run_afternoon:
         import scheduler.run_afternoon as run_afternoon
-        run_afternoon.main()
+        rc = max(rc, run_afternoon.main() or 0)
         _mark_ran("last_afternoon_run_date", today_str)
 
-    return 0
+    return rc
 
 
 if __name__ == "__main__":
