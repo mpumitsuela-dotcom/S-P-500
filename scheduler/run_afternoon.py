@@ -39,6 +39,7 @@ import pandas as pd
 from config import KILL_SWITCH_FILE, STRATEGY
 from data.alpaca_data import get_latest_quotes
 from data.finnhub_data import get_news_sentiment_frame
+from execution import decisions
 from execution.alpaca_broker import AlpacaBroker
 from execution.guards import (
     GuardFailure,
@@ -73,6 +74,14 @@ def _write_trial_report_safely(logger, trial_start: date, today: date) -> None:
         logger.error("Could not generate TRIAL_REPORT.md:\n%s", traceback.format_exc())
 
 
+def _record_safely(logger, fn, *args, **kwargs) -> None:
+    """Report bookkeeping must never stop or fail a trading session."""
+    try:
+        fn(*args, **kwargs)
+    except Exception:  # noqa: BLE001
+        logger.warning("Could not write decision record:\n%s", traceback.format_exc())
+
+
 def main() -> int:
     logger = setup_logging("run_afternoon")
     logger.info("=== PM session start ===")
@@ -94,6 +103,7 @@ def main() -> int:
         current_positions = broker.get_positions()
         if not current_positions:
             logger.info("No open positions - nothing to risk-check. Exiting cleanly.")
+            _record_safely(logger, decisions.record_session, "PM", "no_trades", "No open positions to risk-check.")
             return 0
 
         symbols = list(current_positions.keys())
@@ -111,8 +121,10 @@ def main() -> int:
         sentiment = get_news_sentiment_frame(symbols).set_index("symbol")
 
         planned: list[PlannedOrder] = []
+        moves: dict[str, float] = {}
         for sym, pos in current_positions.items():
             intraday_move = (latest_quotes.get(sym, pos.current_price) / pos.avg_entry_price) - 1.0
+            moves[sym] = intraday_move
             sentiment_row = sentiment.loc[sym] if sym in sentiment.index else None
             flagged = bool(sentiment_row["flagged_negative"]) if sentiment_row is not None else False
             if flagged and intraday_move <= INTRADAY_DROP_THRESHOLD:
@@ -127,8 +139,15 @@ def main() -> int:
                         )
                     )
 
+        flagged_names = [s for s in symbols if s in sentiment.index and bool(sentiment.loc[s, "flagged_negative"])]
         if not planned:
             logger.info("No positions triggered the news+price risk check. No trades placed.")
+            _record_safely(
+                logger, decisions.record_session, "PM", "no_trades",
+                f"Risk-checked {len(symbols)} holding(s): none had both clearly negative news and a price drop of "
+                f"{abs(INTRADAY_DROP_THRESHOLD):.0%}+ since entry.",
+                positions=len(symbols), negative_news=flagged_names,
+            )
         else:
             logger.warning("Trimming %d position(s) on news+price risk signal: %s", len(planned), [p.symbol for p in planned])
             results = execute_orders(broker, planned)
@@ -140,17 +159,26 @@ def main() -> int:
                     for r in results
                 ]
             )
+            snapshots = {r["symbol"]: decisions.research_snapshot(r["symbol"], research=sentiment) for r in results}
+            extra = {r["symbol"]: {"move_since_entry": moves.get(r["symbol"])} for r in results}
+            _record_safely(logger, decisions.record_trades, "PM", results, snapshots, latest_quotes, extra=extra)
+            _record_safely(
+                logger, decisions.record_session, "PM", "completed", f"Trimmed {len(results)} position(s) on the news+price risk check",
+                positions=len(symbols), negative_news=flagged_names,
+            )
 
         logger.info("=== PM session complete ===")
         return 0
 
     except GuardFailure as gf:
         logger.error("Guard failure - no trades placed: %s", gf)
+        _record_safely(logger, decisions.record_session, "PM", "halted", f"Safety check stopped the session: {gf}")
         if any(r.name == "trial_period" and not r.passed for r in gf.results):
             _write_trial_report_safely(logger, trial_start, today)
         return 2
     except Exception:
         logger.error("Unhandled exception in PM session:\n%s", traceback.format_exc())
+        _record_safely(logger, decisions.record_session, "PM", "crashed", traceback.format_exc(limit=3))
         logger.error("Setting kill switch to prevent further automated runs until a human reviews this.")
         KILL_SWITCH_FILE.write_text(f"auto-triggered by run_afternoon.py crash at {datetime.now().isoformat()}\n")
         return 1

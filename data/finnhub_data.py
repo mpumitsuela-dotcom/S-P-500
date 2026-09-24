@@ -81,6 +81,9 @@ def _get(path: str, params: dict) -> list | dict:
     return resp.json()
 
 
+TOP_HEADLINES_KEPT = 5
+
+
 def _score_headline(headline: str, summary: str) -> int:
     text = f"{headline} {summary}".lower()
     words = set(_WORD_RE.findall(text))
@@ -113,14 +116,32 @@ def get_news_sentiment(symbol: str, lookback_days: int = 2) -> dict:
         articles = []
 
     total_score = 0
+    scored = []
     for a in articles:
-        total_score += _score_headline(a.get("headline", ""), a.get("summary", ""))
+        score = _score_headline(a.get("headline", ""), a.get("summary", ""))
+        total_score += score
+        scored.append((score, a))
+
+    # The headlines that moved the score most (then the newest), kept so the
+    # daily/weekly reports can show the actual news behind a decision.
+    scored.sort(key=lambda sa: (abs(sa[0]), sa[1].get("datetime") or 0), reverse=True)
+    top_headlines = [
+        {
+            "headline": a.get("headline", ""),
+            "source": a.get("source", ""),
+            "url": a.get("url", ""),
+            "datetime": a.get("datetime"),
+            "score": score,
+        }
+        for score, a in scored[:TOP_HEADLINES_KEPT]
+    ]
 
     return {
         "symbol": symbol,
         "headline_count": len(articles),
         "sentiment_score": total_score,
         "flagged_negative": total_score <= -3 and len(articles) >= 2,
+        "top_headlines": top_headlines,
     }
 
 
@@ -183,6 +204,8 @@ def _research_row(symbol: str) -> dict:
         "symbol": symbol,
         "news_sentiment_score": news.get("sentiment_score", 0),
         "headline_count": news.get("headline_count", 0),
+        "top_headlines": news.get("top_headlines", []),
+        "analyst_period": rec.get("period"),
         "analyst_score": _analyst_score(rec),
         "total_analysts": (rec.get("strongBuy") or 0) + (rec.get("buy") or 0) + (rec.get("hold") or 0)
         + (rec.get("sell") or 0) + (rec.get("strongSell") or 0),

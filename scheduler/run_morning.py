@@ -42,6 +42,7 @@ from config import KILL_SWITCH_FILE, STRATEGY
 from data.alpaca_data import get_daily_bars, get_latest_quotes
 from data.finnhub_data import get_research_frame
 from data.fmp_data import get_fundamentals_frame
+from execution import decisions
 from execution.alpaca_broker import AlpacaBroker
 from execution.guards import (
     GuardFailure,
@@ -79,6 +80,14 @@ def _write_trial_report_safely(logger, trial_start: date, today: date) -> None:
         logger.error("=== 30-DAY TRIAL COMPLETE === report written to TRIAL_REPORT.md")
     except Exception:
         logger.error("Could not generate TRIAL_REPORT.md:\n%s", traceback.format_exc())
+
+
+def _record_safely(logger, fn, *args, **kwargs) -> None:
+    """Report bookkeeping must never stop or fail a trading session."""
+    try:
+        fn(*args, **kwargs)
+    except Exception:  # noqa: BLE001
+        logger.warning("Could not write decision record:\n%s", traceback.format_exc())
 
 
 def main() -> int:
@@ -147,8 +156,17 @@ def main() -> int:
         orders = compute_rebalance_orders(target, current_positions, sizing_equity, latest_quotes)
         logger.info("Planned %d orders (realized vol %.1f%%, target %.1f%%)", len(orders), realized_vol * 100, STRATEGY.target_annual_vol * 100)
 
+        target_summary = [
+            {"symbol": r.symbol, "sector": r.sector, "weight": r.target_weight, "combined_score": r.combined_score}
+            for r in target.itertuples()
+        ]
         if not orders:
             logger.info("No orders meet the minimum-drift threshold - book is already close to target. No trades placed.")
+            _record_safely(
+                logger, decisions.record_session, "AM", "no_trades",
+                "Portfolio was already close to the research-ranked target; no position drifted enough to trade.",
+                equity=account_equity, target=target_summary,
+            )
         else:
             # Rationale for every order, before execution, so it's logged even if a later order in the batch errors.
             for o in orders:
@@ -164,17 +182,28 @@ def main() -> int:
                     for r in results
                 ]
             )
+            snapshots = {
+                r["symbol"]: decisions.research_snapshot(r["symbol"], scores, fundamentals, research, prices)
+                for r in results
+            }
+            _record_safely(logger, decisions.record_trades, "AM", results, snapshots, latest_quotes)
+            _record_safely(
+                logger, decisions.record_session, "AM", "completed", f"{len(results)} order(s) placed",
+                equity=account_equity, target=target_summary,
+            )
 
         logger.info("=== AM session complete ===")
         return 0
 
     except GuardFailure as gf:
         logger.error("Guard failure - no trades placed: %s", gf)
+        _record_safely(logger, decisions.record_session, "AM", "halted", f"Safety check stopped the session: {gf}")
         if any(r.name == "trial_period" and not r.passed for r in gf.results):
             _write_trial_report_safely(logger, trial_start, today)
         return 2
     except Exception:
         logger.error("Unhandled exception in AM session:\n%s", traceback.format_exc())
+        _record_safely(logger, decisions.record_session, "AM", "crashed", traceback.format_exc(limit=3))
         logger.error("Setting kill switch to prevent further automated runs until a human reviews this.")
         KILL_SWITCH_FILE.write_text(f"auto-triggered by run_morning.py crash at {datetime.now().isoformat()}\n")
         return 1
