@@ -209,7 +209,9 @@ def _spy_closes(start: date, end: date) -> dict[str, float]:
     try:
         from data.alpaca_data import get_daily_bars
 
-        bars = get_daily_bars(["SPY"], start, end)
+        # get_daily_bars treats `end` as exclusive (it asks up to end 00:00 UTC),
+        # so ask one day further to include `end`'s own closing bar.
+        bars = get_daily_bars(["SPY"], start, end + timedelta(days=1))
     except Exception:  # noqa: BLE001
         logger.warning("Could not fetch SPY bars", exc_info=True)
         return {}
@@ -246,7 +248,11 @@ def _session_lines(records: list[dict]) -> list[str]:
     out = []
     for r in records:
         if r.get("type") == "session":
-            line = f"- **{r['date']} {names.get(r['session'], r['session'])}:** {labels.get(r['outcome'], r['outcome'])} — {r.get('detail', '')}"
+            detail = (r.get("detail") or "").strip()
+            if r.get("outcome") == "crashed" and detail:
+                # A crash record holds a traceback; the owner only needs the error line.
+                detail = f"{detail.splitlines()[-1].strip()} (a technical fault; it was fixed and the session re-ran if a later line says so)"
+            line = f"- **{r['date']} {names.get(r['session'], r['session'])}:** {labels.get(r['outcome'], r['outcome'])} — {detail}"
             excluded = r.get("excluded_unresearched") or []
             if excluded:
                 shown = ", ".join(excluded[:12]) + (f" and {len(excluded) - 12} more" if len(excluded) > 12 else "")

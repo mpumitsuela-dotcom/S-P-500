@@ -155,3 +155,28 @@ def test_long_excluded_list_is_summarised(report_dirs, monkeypatch):
     daily_report.run_end_of_day(date(2026, 9, 24), broker=FakeBroker(100_000.0))
     text = (report_dirs / "daily" / "2026-09-24.md").read_text()
     assert "S011 and 288 more." in text and "S299" not in text
+
+
+def test_crash_traceback_is_reduced_to_its_error_line(report_dirs, monkeypatch):
+    monkeypatch.setattr(daily_report, "_spy_closes", lambda s, e: {})
+    now = datetime(2026, 9, 24, 9, 45, tzinfo=NY_TZ)
+    tb = 'Traceback (most recent call last):\n  File "x.py", line 1, in f\n    boom()\nTypeError: Invalid value'
+    decisions.record_session("AM", "crashed", tb, now=now)
+    daily_report.run_end_of_day(date(2026, 9, 24), broker=FakeBroker(100_000.0))
+    text = (report_dirs / "daily" / "2026-09-24.md").read_text()
+    assert "CRASHED — TypeError: Invalid value (a technical fault" in text
+    assert "Traceback" not in text and 'File "x.py"' not in text
+
+
+def test_spy_request_includes_the_report_day(monkeypatch):
+    import data.alpaca_data as alpaca_data
+
+    seen = {}
+
+    def fake_bars(symbols, start, end):
+        seen["end"] = end
+        return pd.DataFrame({"symbol": ["SPY"], "date": [pd.Timestamp("2026-09-24")], "close": [500.0]})
+
+    monkeypatch.setattr(alpaca_data, "get_daily_bars", fake_bars)
+    closes = daily_report._spy_closes(date(2026, 9, 20), date(2026, 9, 24))
+    assert seen["end"] == date(2026, 9, 25) and closes == {"2026-09-24": 500.0}
