@@ -225,4 +225,8 @@ def get_fundamentals_frame(symbols: list[str], max_new_symbols: int | None = Non
             len(rows), len(cached_symbols) + len(new_symbols),
         )
 
-    return pd.DataFrame(rows)
+    frame = pd.DataFrame(rows)
+    for col in ("pe", "pb", "roe", "gross_margin", "debt_to_equity", "earnings_growth"):
+        if col in frame.columns:
+            frame[col] = pd.to_numeric(frame[col], errors="coerce")
+    return frame
