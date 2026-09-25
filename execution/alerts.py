@@ -54,7 +54,9 @@ def build_alert(
         if r.get("type") == "session" and r.get("session") in codes and r.get("outcome") in ("halted", "crashed")
         and (since is None or datetime.fromisoformat(r["timestamp"]) >= since.replace(microsecond=0))
     ]
-    if not records and rc == 0 and not note:
+    since_ok = lambda r: since is None or datetime.fromisoformat(r["timestamp"]) >= since.replace(microsecond=0)  # noqa: E731
+    foreign = [r for r in decisions.read_records(day, day) if r.get("type") == "foreign_orders" and since_ok(r)]
+    if not records and rc == 0 and not note and not foreign:
         return None
 
     owner_items, technical_items = [], []
@@ -67,6 +69,16 @@ def build_alert(
     elif note:
         technical_items.append((note, None))
 
+    for r in foreign:
+        listed = "; ".join(r.get("orders", [])[:15])
+        more = len(r.get("orders", [])) - 15
+        owner_items.append((
+            f"{len(r.get('orders', []))} order(s) on the Alpaca account were NOT placed by this agent: {listed}"
+            + (f" and {more} more" if more > 0 else ""),
+            "Something else is trading this account, most likely an older copy of the agent (for example a "
+            "scheduled task on your computer). Turn it off so only this agent trades; otherwise the two "
+            "fight each other's positions and the trial's comparison with the S&P 500 is meaningless.",
+        ))
     needs_owner = bool(owner_items)
     title = (
         f"{'🟠 Decision needed' if needs_owner else '⚠️ Trading agent needs attention'} — "
