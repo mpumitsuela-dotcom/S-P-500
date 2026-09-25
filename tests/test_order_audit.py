@@ -57,3 +57,10 @@ def test_agent_orders_are_tagged(monkeypatch):
     monkeypatch.setattr(broker, "_request", lambda method, path, **kw: sent.update(kw["json"]) or {"id": "1", "status": "accepted"})
     broker.submit_order("AAPL", 1, "buy")
     assert sent["client_order_id"].startswith(AGENT_ORDER_PREFIX) and len(sent["client_order_id"]) <= 48
+
+
+def test_orders_already_reviewed_by_client_id_are_not_re_reported():
+    decisions._append({"type": "foreign_orders", "timestamp": "2026-09-25T09:20:00-04:00", "date": "2026-09-25",
+                       "reviewed": True, "client_order_ids": ["uuid-3"], "orders": []})
+    broker = Broker([order("3", "KO", "buy", 34, "2026-09-24T14:10:00Z")])
+    assert order_audit.check_and_record(broker, now=NOW) == []
