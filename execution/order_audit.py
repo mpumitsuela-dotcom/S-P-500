@@ -64,8 +64,14 @@ def check_and_record(broker, days: int = 3, now: datetime | None = None) -> list
     since = now - timedelta(days=days)
     earlier = decisions.read_records(since.date() - timedelta(days=30), now.date())
     trades = [r for r in earlier if r.get("type") == "trade"]
-    reported = {oid for r in earlier if r.get("type") == "foreign_orders" for oid in r.get("order_ids", [])}
-    new = [o for o in foreign_orders(broker.get_orders(after=since), trades) if o["id"] not in reported]
+    reported = {
+        oid for r in earlier if r.get("type") == "foreign_orders"
+        for oid in r.get("order_ids", []) + r.get("client_order_ids", [])
+    }
+    new = [
+        o for o in foreign_orders(broker.get_orders(after=since), trades)
+        if o["id"] not in reported and o.get("client_order_id") not in reported
+    ]
     if new:
         decisions._append(
             {
@@ -73,6 +79,7 @@ def check_and_record(broker, days: int = 3, now: datetime | None = None) -> list
                 "timestamp": now.isoformat(timespec="seconds"),
                 "date": now.date().isoformat(),
                 "order_ids": [o["id"] for o in new],
+                "client_order_ids": [o.get("client_order_id") for o in new],
                 "orders": [summarize(o) for o in new],
             }
         )
