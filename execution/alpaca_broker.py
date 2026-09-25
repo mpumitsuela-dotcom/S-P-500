@@ -8,6 +8,8 @@ class's allow_live constructor argument).
 from __future__ import annotations
 
 import logging
+import uuid
+from datetime import datetime, timezone
 
 import pandas as pd
 import requests
@@ -17,6 +19,8 @@ from config import API_KEYS, LIVE_TRADING_CONFIRM_VALUE, LIVE_TRADING_ENV_FLAG
 from execution.broker_base import Broker, Order, Position
 
 logger = logging.getLogger(__name__)
+
+AGENT_ORDER_PREFIX = "sp500agent-"
 
 
 class LiveTradingNotConfirmedError(Exception):
@@ -102,10 +106,20 @@ class AlpacaBroker(Broker):
             "side": side,
             "type": "market",
             "time_in_force": "day",
+            # Tags the order as this agent's, so execution/order_audit.py can
+            # tell its orders apart from anything else trading the account.
+            "client_order_id": f"{AGENT_ORDER_PREFIX}{uuid.uuid4().hex[:20]}",
         }
         resp = self._request("POST", "/v2/orders", json=payload)
         logger.info("Submitted %s %s x%d -> order id %s, status %s", side, symbol, qty, resp.get("id"), resp.get("status"))
         return Order(symbol=symbol, qty=qty, side=side, id=resp.get("id"), status=resp.get("status", "unknown"))
+
+    def get_orders(self, after: datetime, limit: int = 500) -> list[dict]:
+        """Every order (any status) submitted after `after`, newest first."""
+        return self._request(
+            "GET", "/v2/orders",
+            params={"status": "all", "after": after.astimezone(timezone.utc).isoformat(), "limit": limit, "direction": "desc"},
+        )
 
     def cancel_all_open_orders(self) -> None:
         self._request("DELETE", "/v2/orders")

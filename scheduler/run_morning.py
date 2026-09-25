@@ -44,6 +44,7 @@ from data.finnhub_data import get_research_frame
 from data.fmp_data import get_fundamentals_frame
 from execution import decisions
 from execution.alpaca_broker import AlpacaBroker
+from execution.order_audit import check_and_record as check_foreign_orders
 from execution.guards import (
     GuardFailure,
     check_data_freshness,
@@ -185,6 +186,7 @@ def main() -> int:
         symbols = constituents["symbol"].tolist()
 
         broker = AlpacaBroker()
+        _record_safely(logger, check_foreign_orders, broker)
         account_equity = broker.get_account_equity()
         get_or_init_trial_start_equity(account_equity)  # records the baseline exactly once, on the first real run
         current_positions = broker.get_positions()

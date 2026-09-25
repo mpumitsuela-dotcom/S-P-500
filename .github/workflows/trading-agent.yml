@@ -84,6 +84,12 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: python scheduler/run_shared.py
 
+      # Manual runs also list recent orders and flag any this agent didn't place.
+      - name: Order audit
+        if: github.event_name == 'workflow_dispatch'
+        continue-on-error: true
+        run: python scripts/order_audit.py --days 5
+
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4

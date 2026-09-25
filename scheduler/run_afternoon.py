@@ -41,6 +41,7 @@ from data.alpaca_data import get_latest_quotes
 from data.finnhub_data import get_news_sentiment_frame
 from execution import decisions
 from execution.alpaca_broker import AlpacaBroker
+from execution.order_audit import check_and_record as check_foreign_orders
 from execution.guards import (
     GuardFailure,
     check_drawdown_halt,
@@ -100,6 +101,7 @@ def main() -> int:
         )
 
         broker = AlpacaBroker()
+        _record_safely(logger, check_foreign_orders, broker)
         current_positions = broker.get_positions()
         if not current_positions:
             logger.info("No open positions - nothing to risk-check. Exiting cleanly.")
