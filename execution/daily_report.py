@@ -118,6 +118,7 @@ def render_trade(rec: dict) -> list[str]:
         lines.append("")
 
     f = research.get("fundamentals") or {}
+    source = research.get("fundamentals_source") or "FMP"
     if f:
         bits = []
         if "pe" in f:
@@ -130,7 +131,7 @@ def render_trade(rec: dict) -> list[str]:
             bits.append(f"gross margin {_pct(f['gross_margin'], signed=False)}")
         if "debt_to_equity" in f:
             bits.append(f"debt/equity {_num(f['debt_to_equity'], '{:.2f}')}")
-        lines += [f"**Company financials (FMP, trailing 12 months):** {', '.join(bits)}", ""]
+        lines += [f"**Company financials ({source}, trailing 12 months):** {', '.join(bits)}", ""]
 
     p = research.get("price") or {}
     if p:

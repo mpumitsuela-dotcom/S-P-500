@@ -65,7 +65,7 @@ def market(tmp_path, monkeypatch):
         monkeypatch.setattr(mod, "KILL_SWITCH_FILE", tmp_path / "KILL_SWITCH")
     monkeypatch.setattr(run_morning, "load_universe", lambda: (pd.DataFrame({"symbol": symbols}), sector_map))
     monkeypatch.setattr(run_morning, "get_daily_bars", lambda syms, s, e: prices)
-    monkeypatch.setattr(run_morning, "get_fundamentals_frame", lambda syms: fundamentals)
+    monkeypatch.setattr(run_morning, "get_fundamentals", lambda syms, **k: fundamentals)
     monkeypatch.setattr(run_morning, "get_research_frame", lambda syms: research)
     for mod in (run_morning, run_afternoon):
         monkeypatch.setattr(mod, "get_latest_quotes", lambda syms: quotes[quotes["symbol"].isin(syms)])
@@ -158,7 +158,7 @@ def test_missing_fundamentals_alone_does_not_block_a_buy(market, monkeypatch):
     """FMP's free plan doesn't cover every stock; news + analyst research is what's required."""
     tmp_path, symbols, research, _ = market
     no_fmp = pd.DataFrame(columns=["symbol", "pe", "pb", "roe", "gross_margin", "debt_to_equity", "earnings_growth"])
-    monkeypatch.setattr(run_morning, "get_fundamentals_frame", lambda syms, **k: no_fmp)
+    monkeypatch.setattr(run_morning, "get_fundamentals", lambda syms, **k: no_fmp)
     broker = FakeBroker()
     monkeypatch.setattr(run_morning, "AlpacaBroker", lambda: broker)
     assert run_morning.main() == 0

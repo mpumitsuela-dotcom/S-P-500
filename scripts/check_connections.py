@@ -106,6 +106,20 @@ def finnhub_analysts():
     return f"analyst consensus for {recs[0].get('period')}"
 
 
+def finnhub_financials():
+    metric = _get_json(
+        "https://finnhub.io/api/v1/stock/metric",
+        params={"symbol": PROBE_SYMBOL, "metric": "all", "token": API_KEYS.finnhub_key},
+    ).get("metric") or {}
+    fields = {"P/E": "peTTM", "P/B": "pbQuarterly", "ROE": "roeTTM", "gross margin": "grossMarginTTM",
+              "debt/equity": "totalDebt/totalEquityQuarterly"}
+    found = [label for label, key in fields.items() if isinstance(metric.get(key), (int, float))]
+    if not found:
+        raise RuntimeError("no financial ratios returned")
+    missing = [label for label in fields if label not in found]
+    return f"{PROBE_SYMBOL} financials: {', '.join(found)}" + (f" (missing: {', '.join(missing)})" if missing else "")
+
+
 def wikipedia_universe():
     from data.universe import _fetch_from_wikipedia
 
@@ -127,6 +141,7 @@ def main() -> int:
         ("FMP fundamentals (research: value/quality)", fmp_fundamentals),
         ("Finnhub company news (research: sentiment)", finnhub_news),
         ("Finnhub analyst ratings (research: consensus)", finnhub_analysts),
+        ("Finnhub company financials (research: FMP fallback)", finnhub_financials),
         ("Wikipedia S&P 500 list (universe)", wikipedia_universe),
     ]
     print("Checking connections:")

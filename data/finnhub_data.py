@@ -49,6 +49,9 @@ NEWS_TTL_SECONDS = 3600  # news changes fast - short TTL, and it's cheap on the 
 # means something. ~20h so it effectively refreshes once/trading day without
 # being so tight that a slightly-late run refetches everything.
 RESEARCH_NEWS_TTL_SECONDS = 20 * 3600
+# v2: news is filtered to articles about the company (see is_about); the new
+# namespace keeps unfiltered results cached by earlier versions from being reused.
+RESEARCH_NEWS_NS = "finnhub_research_news_v2"
 RECOMMENDATION_TTL_SECONDS = 24 * 3600 * 3  # analyst recommendation trends update roughly monthly
 
 # Fetching fresh research for the full ~500-symbol universe every run would
@@ -117,6 +120,52 @@ def _get(path: str, params: dict) -> list | dict:
 
 TOP_HEADLINES_KEPT = 5
 
+# Finnhub's company-news feed also returns general market articles that merely
+# list the ticker in metadata (e.g. a Darden story under BAC, a CareDx story
+# under TGT - seen in the first week's reports). Only articles whose headline
+# or summary actually names the company (or its ticker) count as research.
+_NAME_SUFFIXES = re.compile(
+    r"[,.]?\s+(inc|incorporated|corp|corporation|co|company|companies|holdings?|group|plc|ltd|limited|"
+    r"international|technology|technologies|the)\.?$",
+    re.IGNORECASE,
+)
+_company_names_cache: dict[str, str] | None = None
+
+
+def _clean_name(name: str) -> str:
+    name = re.sub(r"\s*\(.*?\)", "", name or "").replace(".com", "").strip()
+    name = re.sub(r"^the\s+", "", name, flags=re.IGNORECASE)
+    prev = None
+    while prev != name:
+        prev, name = name, _NAME_SUFFIXES.sub("", name).strip()
+    return name
+
+
+def _company_names() -> dict[str, str]:
+    global _company_names_cache
+    if _company_names_cache is None:
+        try:
+            from data.universe import get_sp500_constituents
+
+            df = get_sp500_constituents()
+            _company_names_cache = {s: _clean_name(n) for s, n in zip(df["symbol"], df["name"])}
+        except Exception:  # noqa: BLE001 - fall back to ticker-only matching
+            logger.warning("Could not load company names for news filtering; using tickers only")
+            _company_names_cache = {}
+    return _company_names_cache
+
+
+def is_about(article: dict, symbol: str, name: str | None) -> bool:
+    """True when the headline or summary names the company or its ticker."""
+    text = f"{article.get('headline', '')} {article.get('summary', '')}".replace("’", "'")
+    ticker = symbol.split(".")[0]
+    # Tickers are matched case-sensitively; one-letter tickers (C, F, T...) only
+    # in the "(C)" form, since a bare capital letter is too common.
+    if re.search(rf"(?<![A-Za-z]){re.escape(ticker)}(?![a-z])", text) and (len(ticker) > 1 or f"({ticker})" in text):
+        return True
+    name = (name or "").replace("’", "'")
+    return len(name) >= 3 and re.search(rf"(?<!\w){re.escape(name)}(?!\w)", text, re.IGNORECASE) is not None
+
 
 def _score_headline(headline: str, summary: str) -> int:
     text = f"{headline} {summary}".lower()
@@ -148,6 +197,9 @@ def get_news_sentiment(symbol: str, lookback_days: int = 2) -> dict:
     articles = cached_call("finnhub_news", cache_key, NEWS_TTL_SECONDS, fetch)
     if not isinstance(articles, list):
         articles = []
+    name = _company_names().get(symbol)
+    fetched = len(articles)
+    articles = [a for a in articles if is_about(a, symbol, name)]
 
     total_score = 0
     scored = []
@@ -173,6 +225,7 @@ def get_news_sentiment(symbol: str, lookback_days: int = 2) -> dict:
     return {
         "symbol": symbol,
         "headline_count": len(articles),
+        "headlines_filtered_out": fetched - len(articles),
         "sentiment_score": total_score,
         "flagged_negative": total_score <= -3 and len(articles) >= 2,
         "top_headlines": top_headlines,
@@ -214,7 +267,7 @@ def _research_news_cached(symbol: str) -> dict:
     def fetch():
         return get_news_sentiment(symbol)
 
-    return cached_call("finnhub_research_news", symbol, RESEARCH_NEWS_TTL_SECONDS, fetch)
+    return cached_call(RESEARCH_NEWS_NS, symbol, RESEARCH_NEWS_TTL_SECONDS, fetch)
 
 
 def _analyst_score(rec: dict) -> float | None:
@@ -273,7 +326,7 @@ def get_research_frame(symbols: list[str], max_new_symbols: int | None = None) -
 
     cached_symbols = [
         s for s in symbols
-        if is_fresh("finnhub_research_news", s, RESEARCH_NEWS_TTL_SECONDS)
+        if is_fresh(RESEARCH_NEWS_NS, s, RESEARCH_NEWS_TTL_SECONDS)
         and is_fresh("finnhub_recommendation", s, RECOMMENDATION_TTL_SECONDS)
     ]
     new_symbols = [s for s in symbols if s not in cached_symbols][:max_new_symbols]
@@ -309,3 +362,43 @@ def get_research_frame(symbols: list[str], max_new_symbols: int | None = None) -
                         rows.append(row)
 
     return pd.DataFrame(rows)
+
+
+# ---------------------------------------------------------------------------
+# Basic financials: a free fallback for company fundamentals. FMP's free plan
+# doesn't cover many S&P 500 stocks (8 of the first 13 trades had no P/E, ROE
+# etc.), which left their value/quality scores neutral. Finnhub's free
+# /stock/metric endpoint covers the same ratios for most listed companies.
+# ---------------------------------------------------------------------------
+METRIC_TTL_SECONDS = 7 * 24 * 3600  # quarterly data - weekly refresh is plenty
+METRIC_NS = "finnhub_metric"
+
+
+def get_basic_financials(symbol: str) -> dict:
+    def fetch():
+        data = _get("/stock/metric", {"symbol": symbol, "metric": "all"})
+        return (data or {}).get("metric") or {}
+
+    return cached_call(METRIC_NS, symbol, METRIC_TTL_SECONDS, fetch)
+
+
+def _first(metric: dict, *keys: str, scale: float = 1.0):
+    for k in keys:
+        v = metric.get(k)
+        if isinstance(v, (int, float)):
+            return v * scale
+    return None
+
+
+def fundamentals_row(symbol: str) -> dict:
+    """Same fields and units as data/fmp_data.py _row_from (ratios as fractions)."""
+    m = get_basic_financials(symbol)
+    return {
+        "symbol": symbol,
+        "pe": _first(m, "peTTM", "peExclExtraTTM", "peBasicExclExtraTTM", "peNormalizedAnnual"),
+        "pb": _first(m, "pbQuarterly", "pbAnnual", "ptbvQuarterly"),
+        "roe": _first(m, "roeTTM", "roeRfy", scale=0.01),  # Finnhub reports percent
+        "gross_margin": _first(m, "grossMarginTTM", "grossMarginAnnual", scale=0.01),
+        "debt_to_equity": _first(m, "totalDebt/totalEquityQuarterly", "totalDebt/totalEquityAnnual"),
+        "earnings_growth": None,
+    }

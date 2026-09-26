@@ -89,7 +89,8 @@ def research_snapshot(
     r = _row(research, symbol)
     snap = {
         "factors": {k: s.get(k) for k in _FACTOR_FIELDS if k in s},
-        "fundamentals": {k: f.get(k) for k in _FUNDAMENTAL_FIELDS if f.get(k) is not None},
+        "fundamentals": {k: f.get(k) for k in _FUNDAMENTAL_FIELDS if f.get(k) is not None and f.get(k) == f.get(k)},
+        "fundamentals_source": f.get("source"),
         "price": price_stats(prices, symbol),
         "news": {
             "headline_count": r.get("headline_count"),
