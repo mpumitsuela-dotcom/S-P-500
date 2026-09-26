@@ -41,7 +41,7 @@ import pandas as pd
 from config import KILL_SWITCH_FILE, STRATEGY
 from data.alpaca_data import get_daily_bars, get_latest_quotes
 from data.finnhub_data import get_research_frame
-from data.fmp_data import get_fundamentals_frame
+from data.fundamentals import get_fundamentals
 from execution import decisions
 from execution.alpaca_broker import AlpacaBroker
 from execution.order_audit import check_and_record as check_foreign_orders
@@ -152,7 +152,7 @@ def _research_before_buying(logger, prices, sector_map, fundamentals, research, 
             miss_r = sorted(s for s in to_fetch if s not in _symbols_in(research))
             logger.info("Researching before buying - fundamentals: %s; news/analysts: %s", miss_f, miss_r)
             if miss_f:
-                fundamentals = pd.concat([fundamentals, get_fundamentals_frame(miss_f, max_new_symbols=len(miss_f))], ignore_index=True)
+                fundamentals = pd.concat([fundamentals, get_fundamentals(miss_f, max_new_symbols=len(miss_f))], ignore_index=True)
             if miss_r:
                 research = pd.concat([research, get_research_frame(miss_r, max_new_symbols=len(miss_r))], ignore_index=True)
             continue  # re-rank with the new research
@@ -194,7 +194,7 @@ def main() -> int:
 
         start, end = lookback_window(date.today())
         prices = get_daily_bars(symbols, start, end)
-        fundamentals = get_fundamentals_frame(symbols)
+        fundamentals = get_fundamentals(symbols)
         research = get_research_frame(symbols)
         latest_quotes = get_latest_quotes(symbols).set_index("symbol")["price"]
         equity_curve = broker.get_portfolio_history()
