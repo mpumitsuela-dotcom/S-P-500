@@ -118,7 +118,7 @@ def record_trades(session: str, results: list[dict], snapshots: dict[str, dict],
     now = now or datetime.now(NY_TZ)
     for r in results:
         sym = r["symbol"]
-        price = float(prices[sym]) if prices is not None and sym in prices.index else None
+        price = r.get("fill_price") or (float(prices[sym]) if prices is not None and sym in prices.index else None)
         _append(
             {
                 "type": "trade",
@@ -129,6 +129,7 @@ def record_trades(session: str, results: list[dict], snapshots: dict[str, dict],
                 "side": r["side"],
                 "qty": r["qty"],
                 "status": r["status"],
+                "requested_qty": r.get("requested_qty", r["qty"]),
                 "price": price,
                 "value": price * r["qty"] if price else None,
                 "reason": r.get("reason", ""),

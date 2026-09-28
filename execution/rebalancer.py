@@ -6,6 +6,8 @@ would just bleed out edge to slippage.
 """
 from __future__ import annotations
 
+import logging
+import math
 from dataclasses import dataclass
 
 import pandas as pd
@@ -13,12 +15,26 @@ import pandas as pd
 from config import STRATEGY
 from execution.broker_base import Broker, Position
 
+logger = logging.getLogger(__name__)
+
+MIN_ORDER_DOLLARS = 1.0  # Alpaca's minimum for a fractional order
+
+
+def share_qty(dollars: float, price: float, fractional: bool) -> float:
+    """Shares that `dollars` buys, rounded DOWN: to 3 decimals when the stock
+    trades in fractions (so each holding gets its intended weight even for a
+    $1,800 stock), otherwise to whole shares."""
+    if price <= 0 or dollars <= 0:
+        return 0
+    raw = dollars / price
+    return math.floor(raw * 1000) / 1000 if fractional else float(math.floor(raw))
+
 
 @dataclass
 class PlannedOrder:
     symbol: str
     side: str
-    qty: int
+    qty: float
     reason: str
 
 
@@ -29,7 +45,9 @@ def compute_rebalance_orders(
     latest_prices: pd.Series,
     min_drift: float | None = None,
     max_turnover: float | None = None,
+    fractionable: set[str] | None = None,
 ) -> list[PlannedOrder]:
+    """fractionable: symbols that may be traded in fractions (None = whole shares only)."""
     min_drift = min_drift if min_drift is not None else STRATEGY.min_rebalance_drift
     max_turnover = max_turnover if max_turnover is not None else STRATEGY.max_turnover_per_rebalance
 
@@ -62,8 +80,8 @@ def compute_rebalance_orders(
         if abs(dollar_amount) > remaining_turnover_budget:
             dollar_amount = remaining_turnover_budget if dollar_amount > 0 else -remaining_turnover_budget
 
-        qty = int(abs(dollar_amount) // price)
-        if qty <= 0:
+        qty = share_qty(abs(dollar_amount), price, symbol in (fractionable or set()))
+        if qty <= 0 or qty * price < MIN_ORDER_DOLLARS:
             continue
 
         side = "buy" if d > 0 else "sell"
@@ -80,21 +98,71 @@ def compute_rebalance_orders(
     return orders
 
 
-def execute_orders(broker: Broker, orders: list[PlannedOrder], latest_prices: pd.Series | None = None) -> list[dict]:
+def _limit_price(side: str, quote: float | None, buffer: float | None) -> float | None:
+    """A marketable limit: a little above the quote to buy, a little below to sell."""
+    if not quote or quote <= 0 or not buffer:
+        return None
+    return quote * (1 + buffer) if side == "buy" else quote * (1 - buffer)
+
+
+def execute_orders(
+    broker: Broker,
+    orders: list[PlannedOrder],
+    latest_prices: pd.Series | None = None,
+    *,
+    quotes: pd.Series | None = None,
+    limit_buffer: float | None = None,
+    fill_timeout: float = 90,
+) -> list[dict]:
     """
-    Executes sells before buys (frees up cash first). For the SimulationBroker,
-    which needs an execution price, latest_prices must be supplied; the
-    AlpacaBroker.submit_order signature doesn't take a price (market order).
+    Executes sells before buys. On a broker that can report fills (Alpaca):
+      - orders are marketable limits (quote +/- limit_buffer) when quotes and
+        a buffer are given;
+      - the sells are confirmed filled before any buy is sent, so a buy is never
+        placed against cash that a failed sell didn't free up;
+      - anything still unfilled after fill_timeout is cancelled, and each
+        result carries the final status and the quantity actually filled.
+    The SimulationBroker (backtests) needs an execution price: pass latest_prices.
     """
-    results = []
-    ordered = sorted(orders, key=lambda o: 0 if o.side == "sell" else 1)
-    for o in ordered:
+    can_confirm = hasattr(broker, "wait_for_orders")
+    results: list[dict] = []
+
+    def submit(o: PlannedOrder) -> dict:
         try:
             if latest_prices is not None:
                 order = broker.submit_order(o.symbol, o.qty, o.side, price=latest_prices.get(o.symbol))
             else:
-                order = broker.submit_order(o.symbol, o.qty, o.side)
-            results.append({"symbol": o.symbol, "side": o.side, "qty": o.qty, "status": order.status, "reason": o.reason})
+                limit = _limit_price(o.side, quotes.get(o.symbol) if quotes is not None else None, limit_buffer)
+                order = (broker.submit_order(o.symbol, o.qty, o.side, limit_price=limit) if limit
+                         else broker.submit_order(o.symbol, o.qty, o.side))
+            return {"symbol": o.symbol, "side": o.side, "qty": o.qty, "status": order.status, "reason": o.reason, "order_id": order.id}
         except Exception as exc:  # noqa: BLE001 - one order failing must not abort the whole batch
-            results.append({"symbol": o.symbol, "side": o.side, "qty": o.qty, "status": f"error: {exc}", "reason": o.reason})
+            return {"symbol": o.symbol, "side": o.side, "qty": o.qty, "status": f"error: {exc}", "reason": o.reason, "order_id": None}
+
+    def confirm(batch: list[dict]) -> None:
+        ids = [r["order_id"] for r in batch if r.get("order_id")]
+        if not can_confirm or not ids:
+            return
+        latest = broker.wait_for_orders(ids, timeout=fill_timeout)
+        for r in batch:
+            info = latest.get(r.get("order_id") or "")
+            if not info:
+                continue
+            status = info.get("status", r["status"])
+            filled = float(info.get("filled_qty") or 0)
+            if status not in broker.FINAL_STATUSES:  # still working after the timeout: stop it
+                broker.cancel_order(r["order_id"])
+                status = "partially_filled_then_cancelled" if filled else "unfilled_cancelled"
+            r["status"], r["requested_qty"], r["qty"] = status, r["qty"], filled
+            if info.get("filled_avg_price"):
+                r["fill_price"] = float(info["filled_avg_price"])
+
+    sells = [submit(o) for o in orders if o.side == "sell"]
+    confirm(sells)
+    unfilled = [r["symbol"] for r in sells if can_confirm and r["status"] != "filled"]
+    if unfilled:
+        logger.warning("Sells not fully filled before buying: %s", unfilled)
+    buys = [submit(o) for o in orders if o.side != "sell"]
+    confirm(buys)
+    results = sells + buys
     return results

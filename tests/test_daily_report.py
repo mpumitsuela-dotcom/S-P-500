@@ -205,3 +205,18 @@ def test_no_alert_when_both_sessions_ran(report_dirs, monkeypatch):
     decisions.record_session("PM", "no_trades", "ok", now=datetime(2026, 9, 24, 15, 0, tzinfo=NY_TZ))
     daily_report.run_end_of_day(date(2026, 9, 24), broker=FakeBroker(100_000.0))
     assert "needs-attention" not in posted
+
+
+def test_unfilled_order_and_fractional_shares_reported(report_dirs, monkeypatch):
+    monkeypatch.setattr(daily_report, "_spy_closes", lambda s, e: {})
+    now = datetime(2026, 9, 24, 9, 45, tzinfo=NY_TZ)
+    decisions.record_trades("AM", [
+        {"symbol": "BKNG", "side": "buy", "qty": 0.612, "status": "filled", "reason": "r", "fill_price": 5000.0},
+        {"symbol": "XYZ", "side": "buy", "qty": 0, "requested_qty": 10, "status": "unfilled_cancelled", "reason": "r"},
+    ], {}, now=now)
+    decisions.record_session("AM", "completed", "2 order(s) placed", now=now)
+    daily_report.run_end_of_day(date(2026, 9, 24), broker=FakeBroker(100_000.0))
+    text = (report_dirs / "daily" / "2026-09-24.md").read_text()
+    assert "BKNG — bought 0.612 shares at ~$5,000.00 ($3,060)" in text
+    assert "## Orders that did not fill" in text and "XYZ (buy): unfilled_cancelled" in text
+    assert "1 buy(s)" in text

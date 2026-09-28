@@ -22,6 +22,7 @@ from datetime import date, datetime, timedelta
 import requests
 
 from execution import decisions
+from execution.broker_base import format_qty
 from execution.decisions import NY_TZ, REPORTS_DIR
 
 logger = logging.getLogger("sp500_agent.reports")
@@ -83,8 +84,11 @@ def render_trade(rec: dict) -> list[str]:
     factors = research.get("factors") or {}
     side = rec["side"]
     price = rec.get("price")
-    head = f"### {rec['symbol']} — {'bought' if side == 'buy' else 'sold'} {rec['qty']} shares"
-    if price:
+    if not rec.get("qty"):
+        head = f"### {rec['symbol']} — {'buy' if side == 'buy' else 'sell'} order NOT filled"
+    else:
+        head = f"### {rec['symbol']} — {'bought' if side == 'buy' else 'sold'} {format_qty(rec['qty'])} shares"
+    if price and rec.get("qty"):
         head += f" at ~${price:,.2f} ({_money(rec.get('value'))})"
     status = rec.get("status", "")
     lines = [head, ""]
@@ -237,7 +241,7 @@ def _holdings_lines(positions: dict) -> list[str]:
         p = positions[sym]
         gain = p.current_price / p.avg_entry_price - 1 if p.avg_entry_price else None
         lines.append(
-            f"| {sym} | {p.qty} | ${p.avg_entry_price:,.2f} | ${p.current_price:,.2f} | "
+            f"| {sym} | {format_qty(p.qty)} | ${p.avg_entry_price:,.2f} | ${p.current_price:,.2f} | "
             f"{_money(p.market_value)} | {_pct(gain)} |"
         )
     return lines
@@ -263,9 +267,16 @@ def _session_lines(records: list[dict]) -> list[str]:
 
 
 def _trade_sections(trades: list[dict]) -> list[str]:
-    buys = [t for t in trades if t["side"] == "buy"]
-    sells = [t for t in trades if t["side"] == "sell"]
-    lines = ["## Why I bought", ""]
+    buys = [t for t in trades if t["side"] == "buy" and t.get("qty")]
+    sells = [t for t in trades if t["side"] == "sell" and t.get("qty")]
+    unfilled = [t for t in trades if not t.get("qty")]
+    lines = []
+    if unfilled:
+        lines += ["## Orders that did not fill", ""] + [
+            f"- {t['symbol']} ({t['side']}): {t.get('status', 'not filled')} — the price moved past the agent's limit "
+            "before it filled, so nothing was traded; it will be reconsidered at the next session." for t in unfilled
+        ] + [""]
+    lines += ["## Why I bought", ""]
     if buys:
         for t in sorted(buys, key=lambda t: -(t.get("value") or 0)):
             lines += render_trade(t)
@@ -285,8 +296,8 @@ def _trade_sections(trades: list[dict]) -> list[str]:
 def build_daily_report(day: date, equity: float | None, positions: dict, prev_equity: float | None, spy_day: float | None) -> str:
     records = decisions.read_records(day, day)
     trades = [r for r in records if r.get("type") == "trade"]
-    buys = [t for t in trades if t["side"] == "buy"]
-    sells = [t for t in trades if t["side"] == "sell"]
+    buys = [t for t in trades if t["side"] == "buy" and t.get("qty")]
+    sells = [t for t in trades if t["side"] == "sell" and t.get("qty")]
 
     lines = [f"# Daily trading report — {_long_date(day)}", "", "## Summary", ""]
     if equity is not None:
