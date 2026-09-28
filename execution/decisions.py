@@ -154,6 +154,15 @@ def record_session(session: str, outcome: str, detail: str = "", now: datetime |
     )
 
 
+def stopped_out_symbols(today: date, cooldown_days: int) -> set[str]:
+    """Symbols sold by the stop-loss within the last `cooldown_days` calendar days."""
+    start = date.fromordinal(today.toordinal() - cooldown_days)
+    return {
+        r["symbol"] for r in read_records(start, today)
+        if r.get("type") == "trade" and r.get("stop_loss") and r.get("side") == "sell"
+    }
+
+
 def read_records(start: date, end: date) -> list[dict]:
     if not DECISIONS_FILE.exists():
         return []

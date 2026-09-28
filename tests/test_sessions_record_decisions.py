@@ -100,7 +100,7 @@ def test_afternoon_trim_records_move_and_news(market, monkeypatch):
     tmp_path, symbols, _, quotes = market
     sym = symbols[0]
     price = float(quotes.set_index("symbol").loc[sym, "price"])
-    broker = FakeBroker({sym: Position(sym, 10, price / 0.9, price)})  # down 10% since entry
+    broker = FakeBroker({sym: Position(sym, 10, price / 0.95, price)})  # down 5% since entry: under the stop-loss
     monkeypatch.setattr(run_afternoon, "AlpacaBroker", lambda: broker)
     sentiment = pd.DataFrame([{"symbol": sym, "headline_count": 4, "sentiment_score": -5, "flagged_negative": True,
                                "top_headlines": [{"headline": "Regulator opens probe", "source": "AP", "score": -3}]}])
@@ -109,8 +109,38 @@ def test_afternoon_trim_records_move_and_news(market, monkeypatch):
 
     trade = [r for r in _records(tmp_path) if r["type"] == "trade"][0]
     assert trade["session"] == "PM" and trade["side"] == "sell" and trade["qty"] == 5
-    assert trade["move_since_entry"] == pytest.approx(-0.1)
+    assert trade["move_since_entry"] == pytest.approx(-0.05)
     assert trade["research"]["news"]["top_headlines"][0]["headline"] == "Regulator opens probe"
+    assert trade["stop_loss"] is False
+
+
+def test_stop_loss_sells_whole_position_without_bad_news(market, monkeypatch):
+    tmp_path, symbols, _, quotes = market
+    sym, ok = symbols[0], symbols[1]
+    q = quotes.set_index("symbol")["price"]
+    broker = FakeBroker({
+        sym: Position(sym, 10, float(q[sym]) / 0.88, float(q[sym])),  # down 12%
+        ok: Position(ok, 10, float(q[ok]) / 0.95, float(q[ok])),      # down 5%, no bad news
+    })
+    monkeypatch.setattr(run_afternoon, "AlpacaBroker", lambda: broker)
+    monkeypatch.setattr(run_afternoon, "get_news_sentiment_frame", lambda syms: pd.DataFrame(
+        [{"symbol": s, "headline_count": 0, "sentiment_score": 0, "flagged_negative": False, "top_headlines": []} for s in syms]))
+    assert run_afternoon.main() == 0
+
+    trades = [r for r in _records(tmp_path) if r["type"] == "trade"]
+    assert [(t["symbol"], t["qty"], t["stop_loss"]) for t in trades] == [(sym, 10, True)]
+    assert "stop-loss" in trades[0]["reason"]
+    assert decisions.stopped_out_symbols(date.today(), 7) == {sym}
+
+
+def test_morning_does_not_buy_back_a_stopped_out_stock(market, monkeypatch):
+    tmp_path, symbols, _, _ = market
+    broker = FakeBroker()
+    monkeypatch.setattr(run_morning, "AlpacaBroker", lambda: broker)
+    monkeypatch.setattr(decisions, "stopped_out_symbols", lambda today, days: set(symbols[:15]))
+    assert run_morning.main() == 0
+    buys = {o[0] for o in broker.orders if o[2] == "buy"}
+    assert buys and not buys & set(symbols[:15])
 
 
 def test_recording_failure_never_breaks_trading(market, monkeypatch):

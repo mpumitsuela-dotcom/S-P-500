@@ -90,6 +90,11 @@ class StrategyConfig:
     max_daily_drawdown_halt: float = float(os.environ.get("SP500_MAX_DAILY_DD_HALT", "0.06"))
     max_position_daily_move_sanity: float = float(os.environ.get("SP500_PRICE_SANITY_PCT", "0.35"))
     target_annual_vol: float = float(os.environ.get("SP500_TARGET_VOL", "0.15"))
+    # Stop-loss (owner's choice, 28 Sep): the PM check sells the whole position
+    # once it is this far below its purchase price, whatever the news says, and
+    # the AM rebalance won't buy it back for stop_loss_cooldown_days.
+    stop_loss_pct: float = float(os.environ.get("SP500_STOP_LOSS", "0.10"))
+    stop_loss_cooldown_days: int = int(os.environ.get("SP500_STOP_LOSS_COOLDOWN_DAYS", "7"))
 
     # Turnover control - the PM session should NOT re-trade the full book;
     # it only acts on guard breaches or material overnight news, to avoid
