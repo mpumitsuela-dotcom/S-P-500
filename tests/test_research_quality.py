@@ -68,3 +68,11 @@ def test_get_fundamentals_respects_new_lookup_budget(monkeypatch):
     out = fundamentals.get_fundamentals(["X", "Y", "Z"])
     assert fetched == ["Z", "X"]  # cached Z is free; only one new lookup
     assert set(out["symbol"]) == {"Z", "X"}
+
+
+def test_one_extreme_stock_cannot_dominate_a_factor():
+    from research.scoring import Z_CAP, sector_neutral_zscore
+
+    df = pd.DataFrame({"sector": ["Tech"] * 40, "momentum_raw": [0.1] * 20 + [0.2] * 19 + [30.0]})
+    z = sector_neutral_zscore(df, "momentum_raw")
+    assert z.max() == Z_CAP and z.min() >= -Z_CAP
