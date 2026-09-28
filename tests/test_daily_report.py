@@ -109,6 +109,8 @@ def test_five_day_report_on_every_fifth_trading_day(report_dirs, monkeypatch):
     assert "Main reason behind buys:** Momentum (5)" in text
     assert "Sectors bought:** Information Technology (5)" in text
     assert text.count("AAPL — bought 10 shares") == 5
+    assert "## Risk scorecard (trial to date)" in text
+    assert "Largest fall from a peak (max drawdown):** none so far" in text  # equity only rose
 
 
 def test_report_posted_as_issue_when_token_present(report_dirs, monkeypatch):
