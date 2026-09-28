@@ -314,7 +314,7 @@ def build_daily_report(day: date, equity: float | None, positions: dict, prev_eq
     return "\n".join(lines)
 
 
-def build_period_report(days: list[date], equity_by_day: dict[str, float], start_equity: float | None, positions: dict, spy_closes: dict[str, float], day_number: int) -> str:
+def build_period_report(days: list[date], equity_by_day: dict[str, float], start_equity: float | None, positions: dict, spy_closes: dict[str, float], day_number: int, risk_lines: list[str] | None = None) -> str:
     start, end = days[0], days[-1]
     records = decisions.read_records(start, end)
     trades = [r for r in records if r.get("type") == "trade"]
@@ -348,6 +348,7 @@ def build_period_report(days: list[date], equity_by_day: dict[str, float], start
         prev = eq or prev
     lines.append("")
 
+    lines += risk_lines or []
     lines += ["## What the research favoured", ""]
     if trades:
         drivers = Counter(_FACTOR_LABELS[k][0] for k in (_driver((t.get("research") or {}).get("factors") or {}) for t in buys) if k)
@@ -469,7 +470,18 @@ def run_end_of_day(day: date, broker=None) -> int:
         earlier = [r for r in _read_equity() if r["date"] < days[0].isoformat()]
         start_equity = earlier[-1]["equity"] if earlier else _trial_start_equity()
         spy = _spy_closes(days[0] - timedelta(days=10), day)
-        period = build_period_report(days, equity_by_day, start_equity, positions, spy, len(trading_days))
+        risk_lines = None
+        try:
+            from execution import risk_metrics
+
+            all_rows = _read_equity()
+            trial_spy = _spy_closes(date.fromisoformat(all_rows[0]["date"]) - timedelta(days=10), day) if all_rows else {}
+            risk_lines = risk_metrics.render(
+                risk_metrics.compute(all_rows, _trial_start_equity(), lambda d: _spy_return(trial_spy, d, d))
+            )
+        except Exception:  # noqa: BLE001 - the scorecard must never stop the report
+            logger.warning("Could not build the risk scorecard", exc_info=True)
+        period = build_period_report(days, equity_by_day, start_equity, positions, spy, len(trading_days), risk_lines)
         WEEKLY_DIR.mkdir(parents=True, exist_ok=True)
         period_path = WEEKLY_DIR / f"5-day-ending-{day.isoformat()}.md"
         period_path.write_text(period, encoding="utf-8")
