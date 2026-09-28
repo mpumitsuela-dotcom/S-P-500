@@ -11,6 +11,7 @@ class Position:
     qty: float  # fractional shares are allowed (Alpaca supports them for most stocks)
     avg_entry_price: float
     current_price: float
+    lastday_price: float | None = None  # previous close, for "today's change"
 
     @property
     def market_value(self) -> float:

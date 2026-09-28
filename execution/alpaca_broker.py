@@ -69,6 +69,7 @@ class AlpacaBroker(Broker):
                 qty=float(p["qty"]),
                 avg_entry_price=float(p["avg_entry_price"]),
                 current_price=float(p["current_price"]),
+                lastday_price=float(p["lastday_price"]) if p.get("lastday_price") else None,
             )
         return out
 
