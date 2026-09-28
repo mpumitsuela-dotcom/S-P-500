@@ -124,9 +124,25 @@ def main() -> int:
 
         planned: list[PlannedOrder] = []
         moves: dict[str, float] = {}
+        stopped: set[str] = set()
         for sym, pos in current_positions.items():
             intraday_move = (latest_quotes.get(sym, pos.current_price) / pos.avg_entry_price) - 1.0
             moves[sym] = intraday_move
+            if STRATEGY.stop_loss_pct > 0 and intraday_move <= -STRATEGY.stop_loss_pct and pos.qty > 0:
+                stopped.add(sym)
+                planned.append(
+                    PlannedOrder(
+                        symbol=sym,
+                        side="sell",
+                        qty=pos.qty,
+                        reason=(
+                            f"stop-loss: {intraday_move:+.1%} below the average purchase price of "
+                            f"${pos.avg_entry_price:,.2f} (limit -{STRATEGY.stop_loss_pct:.0%}); sold the whole position "
+                            f"and won't buy it back for {STRATEGY.stop_loss_cooldown_days} days"
+                        ),
+                    )
+                )
+                continue
             sentiment_row = sentiment.loc[sym] if sym in sentiment.index else None
             flagged = bool(sentiment_row["flagged_negative"]) if sentiment_row is not None else False
             if flagged and intraday_move <= INTRADAY_DROP_THRESHOLD:
@@ -146,12 +162,12 @@ def main() -> int:
             logger.info("No positions triggered the news+price risk check. No trades placed.")
             _record_safely(
                 logger, decisions.record_session, "PM", "no_trades",
-                f"Risk-checked {len(symbols)} holding(s): none had both clearly negative news and a price drop of "
-                f"{abs(INTRADAY_DROP_THRESHOLD):.0%}+ since entry.",
+                f"Risk-checked {len(symbols)} holding(s): none was {STRATEGY.stop_loss_pct:.0%}+ below its purchase "
+                f"price, and none had both clearly negative news and a price drop of {abs(INTRADAY_DROP_THRESHOLD):.0%}+ since entry.",
                 positions=len(symbols), negative_news=flagged_names,
             )
         else:
-            logger.warning("Trimming %d position(s) on news+price risk signal: %s", len(planned), [p.symbol for p in planned])
+            logger.warning("Selling %d position(s) on the risk check (stop-loss: %s): %s", len(planned), sorted(stopped), [p.symbol for p in planned])
             results = execute_orders(broker, planned)
             for r in results:
                 logger.info("Order result: %s", r)
@@ -162,10 +178,12 @@ def main() -> int:
                 ]
             )
             snapshots = {r["symbol"]: decisions.research_snapshot(r["symbol"], research=sentiment) for r in results}
-            extra = {r["symbol"]: {"move_since_entry": moves.get(r["symbol"])} for r in results}
+            extra = {r["symbol"]: {"move_since_entry": moves.get(r["symbol"]), "stop_loss": r["symbol"] in stopped} for r in results}
             _record_safely(logger, decisions.record_trades, "PM", results, snapshots, latest_quotes, extra=extra)
             _record_safely(
-                logger, decisions.record_session, "PM", "completed", f"Trimmed {len(results)} position(s) on the news+price risk check",
+                logger, decisions.record_session, "PM", "completed",
+                f"Sold {len(results)} position(s) on the risk check"
+                + (f" (stop-loss: {', '.join(sorted(stopped))})" if stopped else ""),
                 positions=len(symbols), negative_news=flagged_names,
             )
 
