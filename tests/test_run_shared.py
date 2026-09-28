@@ -38,6 +38,7 @@ def runner(monkeypatch, root, role, now, calls, market_open=True):
         run_session=lambda s: calls.append((root.name, s)) or 0,
         market_open=lambda: market_open,
         alert=lambda *a, **k: None,
+        warm_up=lambda: calls.append((root.name, "warm_up")),
     )
 
 
@@ -144,7 +145,7 @@ def test_report_runs_after_close_on_a_trading_day(monkeypatch, clones):
     # After 4pm Alpaca's clock says "closed" - that must not block the report.
     assert runner(monkeypatch, cloud, "primary", ny(16, 20), calls, market_open=False) == 0
     assert runner(monkeypatch, pc, "backup", ny(16, 45), calls) == 0  # already reported
-    assert calls == [("cloud", "morning"), ("cloud", "report")]
+    assert calls == [("cloud", "morning"), ("cloud", "report"), ("cloud", "warm_up")]
 
 
 def test_no_report_on_a_day_nothing_ran(monkeypatch, clones):
@@ -160,7 +161,7 @@ def test_backup_writes_report_if_primary_missed_it(monkeypatch, clones):
     runner(monkeypatch, cloud, "primary", ny(9, 40), calls)
     assert runner(monkeypatch, pc, "backup", ny(16, 20), calls) == 0  # still in the primary's head start
     assert runner(monkeypatch, pc, "backup", ny(16, 40), calls) == 0
-    assert calls == [("cloud", "morning"), ("pc", "report")]
+    assert calls == [("cloud", "morning"), ("pc", "report"), ("pc", "warm_up")]
 
 
 def test_failed_session_raises_an_alert(monkeypatch, clones):

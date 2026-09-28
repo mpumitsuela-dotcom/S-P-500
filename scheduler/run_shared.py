@@ -126,6 +126,7 @@ def main(
     run_session=_run_session,
     market_open=_market_open_per_alpaca,
     alert=_alert,
+    warm_up=lambda: _warm_up_research(),
 ) -> int:
     role = os.environ.get("SP500_RUNNER_ROLE", "primary").strip().lower()
     runner = os.environ.get("SP500_RUNNER_NAME") or socket.gethostname()
@@ -203,7 +204,21 @@ def main(
 
     # Tell the owner now (GitHub issue -> email) rather than at the end of the day.
     alert(now_ny.date(), runner, claimed, rc, " ".join(notes), since=started)
+    if "report" in claimed:
+        warm_up()
     return rc
+
+
+def _warm_up_research() -> None:
+    """After the report: fetch tomorrow's analyst ratings and financials now, so
+    the morning session only needs the news (data/prefetch.py). Never fails the run."""
+    try:
+        from data.prefetch import warm_slow_research
+        from data.universe import get_sp500_constituents
+
+        warm_slow_research(get_sp500_constituents()["symbol"].tolist())
+    except Exception as exc:  # noqa: BLE001
+        _log(f"research warm-up skipped: {exc!r}")
 
 
 def _refetch_parent(root: Path) -> str | None:
