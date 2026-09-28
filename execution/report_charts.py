@@ -101,25 +101,28 @@ def _figure(plt, height):
 
 def _title(ax, title, subtitle):
     ax.set_title(title, loc="left", fontsize=12, fontweight="bold", color=INK, pad=22)
-    ax.text(0, 1.02, subtitle, transform=ax.transAxes, fontsize=9, color=INK_2, va="bottom")
+    # Offset in points, not a fraction of the axes: on tall charts a fraction
+    # pushed the subtitle up into the title.
+    ax.annotate(subtitle, xy=(0, 1), xycoords="axes fraction", xytext=(0, 6), textcoords="offset points",
+                fontsize=9, color=INK_2, va="bottom")
 
 
 def equity_chart(path: Path, points: list[tuple[date, float]], spy_points: list[tuple[date, float]]) -> None:
     """points: account value by date (trial start first). spy_points: the same
     starting money invested in SPY, by date."""
-    import matplotlib.dates as mdates
     import matplotlib.pyplot as plt
 
     fig, ax = _figure(plt, 3.8)
-    xs, ys = zip(*points)
+    # Trading days are evenly spaced (no gaps for weekends and holidays).
+    days = sorted({d for d, _ in points} | {d for d, _ in spy_points})
+    pos = {d: i for i, d in enumerate(days)}
+    xs, ys = [pos[d] for d, _ in points], [v for _, v in points]
     ax.plot(xs, ys, color=BLUE, linewidth=2, marker="o", markersize=5, label="Agent's account", zorder=3)
     if spy_points:
-        sx, sy = zip(*spy_points)
+        sx, sy = [pos[d] for d, _ in spy_points], [v for _, v in spy_points]
         ax.plot(sx, sy, color=ORANGE, linewidth=2, marker="o", markersize=5, label="Same money in the S&P 500 (SPY)", zorder=2)
     start = ys[0]
-    ax.axhline(start, color=INK_2, linewidth=0.8, linestyle=(0, (3, 3)), zorder=1)
-    ax.text(1.0, start, f"starting value ${start:,.0f}", transform=ax.get_yaxis_transform(),
-            color=INK_2, fontsize=8, ha="right", va="bottom")
+    ax.axhline(start, color=INK_2, linewidth=0.8, linestyle=(0, (3, 3)), zorder=1, label=f"Starting value ${start:,.0f}")
     # Direct labels at the line ends (value and return), text in ink, not series colour.
     ax.annotate(f"${ys[-1]:,.0f} ({ys[-1] / start - 1:+.2%})", (xs[-1], ys[-1]), xytext=(8, 0),
                 textcoords="offset points", color=INK, fontsize=9, va="center")
@@ -127,8 +130,8 @@ def equity_chart(path: Path, points: list[tuple[date, float]], spy_points: list[
         ax.annotate(f"${sy[-1]:,.0f} ({sy[-1] / start - 1:+.2%})", (sx[-1], sy[-1]), xytext=(8, 0),
                     textcoords="offset points", color=INK_2, fontsize=9, va="center")
     ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"${v:,.0f}"))
-    ax.xaxis.set_major_locator(mdates.DayLocator())
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%d %b"))
+    ax.set_xticks(range(len(days)))
+    ax.set_xticklabels([f"{d:%a %d %b}" if i else "Start" for i, d in enumerate(days)])
     ax.margins(x=0.12, y=0.25)
     ax.grid(axis="x", visible=False)
     ax.legend(loc="upper left", frameon=False, fontsize=9, labelcolor=INK_2)
@@ -150,8 +153,8 @@ def allocation_chart(path: Path, rows: list[dict], equity: float) -> None:
     colors = [i[2] for i in items][::-1]
     bars = ax.barh(labels, values, color=colors, height=0.72)
     for bar, (_, dollars, _) in zip(bars, items[::-1]):
-        ax.text(bar.get_width() + 0.3, bar.get_y() + bar.get_height() / 2,
-                f"{bar.get_width():.1f}%  ·  ${dollars:,.0f}", va="center", fontsize=8, color=INK_2)
+        ax.annotate(f"{bar.get_width():.1f}%  ·  ${dollars:,.0f}", (bar.get_width(), bar.get_y() + bar.get_height() / 2),
+                    xytext=(4, 0), textcoords="offset points", va="center", fontsize=8, color=INK_2)
     ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:.0f}%"))
     ax.set_xlim(0, max(values) * 1.3)
     ax.grid(axis="y", visible=False)
