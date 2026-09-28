@@ -76,3 +76,29 @@ def test_one_extreme_stock_cannot_dominate_a_factor():
     df = pd.DataFrame({"sector": ["Tech"] * 40, "momentum_raw": [0.1] * 20 + [0.2] * 19 + [30.0]})
     z = sector_neutral_zscore(df, "momentum_raw")
     assert z.max() == Z_CAP and z.min() >= -Z_CAP
+
+
+def test_warm_up_refreshes_only_stale_or_expiring_research(monkeypatch, tmp_path):
+    import time
+    from data import cache, prefetch
+
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    fresh_ns = cache._key_to_path("finnhub_recommendation", "FRESH")
+    fresh_ns.write_text('{"_cached_at": %f, "data": {}}' % time.time())
+    calls = []
+    monkeypatch.setattr(prefetch.finnhub_data, "get_analyst_recommendation", lambda s: calls.append(("rec", s)))
+    monkeypatch.setattr(prefetch.finnhub_data, "get_basic_financials", lambda s: calls.append(("fin", s)))
+    done = prefetch.warm_slow_research(["FRESH", "OLD"])
+    assert ("rec", "OLD") in calls and ("rec", "FRESH") not in calls
+    assert {("fin", "FRESH"), ("fin", "OLD")} <= set(calls)
+    assert done["analysts"] == 1 and done["financials"] == 2
+
+
+def test_warm_up_stops_at_its_deadline(monkeypatch, tmp_path):
+    from data import cache, prefetch
+
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(prefetch.finnhub_data, "get_analyst_recommendation", lambda s: None)
+    monkeypatch.setattr(prefetch.finnhub_data, "get_basic_financials", lambda s: None)
+    done = prefetch.warm_slow_research(["A", "B", "C"], deadline_seconds=-1)
+    assert done["analysts"] == 0 and done["left"] == 6

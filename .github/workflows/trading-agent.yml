@@ -72,6 +72,12 @@ jobs:
           key: agent-cache-${{ github.run_id }}
           restore-keys: agent-cache-
 
+      # Remember how much research was restored, so a run that ends with less
+      # (e.g. one that restored an older, smaller copy) can't replace the
+      # bigger cache as the newest one - that lost the research between runs.
+      - name: Measure restored cache
+        run: echo "RESTORED_CACHE_KB=$(du -sk .cache 2>/dev/null | cut -f1 || echo 0)" >> "$GITHUB_ENV"
+
       # Manual runs ("Run workflow" button) first check every API connection.
       - name: Check API connections
         if: github.event_name == 'workflow_dispatch'
@@ -100,8 +106,16 @@ jobs:
           if-no-files-found: ignore
           retention-days: 45
 
+      - name: Decide whether to save the data cache
+        id: cache_size
+        if: always()
+        run: |
+          now_kb=$(du -sk .cache 2>/dev/null | cut -f1 || echo 0)
+          echo "restored ${RESTORED_CACHE_KB:-0} KB, now ${now_kb} KB"
+          if [ "${now_kb}" -ge "${RESTORED_CACHE_KB:-0}" ]; then echo "save=true" >> "$GITHUB_OUTPUT"; fi
+
       - name: Save data cache
-        if: always() && hashFiles('.cache/**') != ''
+        if: always() && steps.cache_size.outputs.save == 'true' && hashFiles('.cache/**') != ''
         uses: actions/cache/save@v4
         with:
           path: .cache

@@ -58,7 +58,12 @@ RECOMMENDATION_TTL_SECONDS = 24 * 3600 * 3  # analyst recommendation trends upda
 # be slow (2 calls/symbol at a 60 req/min free-tier limit) and isn't needed -
 # same reasoning and pattern as data/fmp_data.py's fundamentals budget cap.
 # Coverage backfills across a handful of runs, then mostly just refreshes.
-DEFAULT_MAX_NEW_RESEARCH_SYMBOLS_PER_RUN = int(os.environ.get("FINNHUB_MAX_NEW_SYMBOLS_PER_RUN", "120"))
+# News expires after ~20h, so a cap below the universe size meant most stocks
+# were ranked each morning with no news at all (only ~120 of 503 researched).
+# The default now covers the whole S&P 500 every morning (~10 min at the rate
+# limit); analyst ratings and financials are fetched the evening before
+# (data/prefetch.py) so the morning only needs the news.
+DEFAULT_MAX_NEW_RESEARCH_SYMBOLS_PER_RUN = int(os.environ.get("FINNHUB_MAX_NEW_SYMBOLS_PER_RUN", "600"))
 RESEARCH_MAX_WORKERS = int(os.environ.get("FINNHUB_MAX_WORKERS", "6"))
 
 _POSITIVE_WORDS = {
