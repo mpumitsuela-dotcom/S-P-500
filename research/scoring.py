@@ -21,11 +21,18 @@ def winsorize(series: pd.Series, lower_pct: float = 0.01, upper_pct: float = 0.9
     return series.clip(lower=lo, upper=hi)
 
 
+# Winsorizing at the 1st/99th percentile does nothing inside a sector of 30-70
+# stocks (the 99th percentile is the maximum), so one extreme stock could still
+# score +5 or +6 and swamp every other factor (SNDK momentum +6.1, MRNA +5.2 in
+# the first week). Capping the z-score itself bounds any one factor's say.
+Z_CAP = 3.0
+
+
 def zscore(series: pd.Series) -> pd.Series:
     mean, std = series.mean(), series.std()
     if std is None or std == 0 or np.isnan(std):
         return pd.Series(0.0, index=series.index)
-    return (series - mean) / std
+    return ((series - mean) / std).clip(-Z_CAP, Z_CAP)
 
 
 def sector_neutral_zscore(df: pd.DataFrame, value_col: str, sector_col: str = "sector") -> pd.Series:

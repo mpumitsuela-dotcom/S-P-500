@@ -128,6 +128,7 @@ def test_report_posted_as_issue_when_token_present(report_dirs, monkeypatch):
 
     monkeypatch.setattr(daily_report.requests, "post", lambda url, **kw: posted.append((url, kw["json"])) or Resp())
     _record_day(date(2026, 9, 24))
+    decisions.record_session("PM", "no_trades", "ok", now=datetime(2026, 9, 24, 15, 0, tzinfo=NY_TZ))
     assert daily_report.run_end_of_day(date(2026, 9, 24), broker=FakeBroker(100_000.0)) == 0
     url, payload = posted[0]
     assert url == "https://api.github.com/repos/owner/repo/issues"
@@ -180,3 +181,25 @@ def test_spy_request_includes_the_report_day(monkeypatch):
     monkeypatch.setattr(alpaca_data, "get_daily_bars", fake_bars)
     closes = daily_report._spy_closes(date(2026, 9, 20), date(2026, 9, 24))
     assert seen["end"] == date(2026, 9, 25) and closes == {"2026-09-24": 500.0}
+
+
+def test_missed_session_is_reported_and_alerted(report_dirs, monkeypatch):
+    monkeypatch.setattr(daily_report, "_spy_closes", lambda s, e: {})
+    posted = []
+    monkeypatch.setattr(daily_report, "publish_issue", lambda title, body, rel, label: posted.append((title, label)))
+    decisions.record_session("AM", "no_trades", "nothing to do", now=datetime(2026, 9, 24, 9, 45, tzinfo=NY_TZ))
+    daily_report.run_end_of_day(date(2026, 9, 24), broker=FakeBroker(100_000.0))
+    text = (report_dirs / "daily" / "2026-09-24.md").read_text()
+    assert "Afternoon risk check:** DID NOT RUN" in text
+    assert "Morning rebalance:** DID NOT RUN" not in text
+    assert ("⚠️ Trading agent needs attention — Thu 24 Sep (session did not run)", "needs-attention") in posted
+
+
+def test_no_alert_when_both_sessions_ran(report_dirs, monkeypatch):
+    monkeypatch.setattr(daily_report, "_spy_closes", lambda s, e: {})
+    posted = []
+    monkeypatch.setattr(daily_report, "publish_issue", lambda title, body, rel, label: posted.append(label))
+    _record_day(date(2026, 9, 24))
+    decisions.record_session("PM", "no_trades", "ok", now=datetime(2026, 9, 24, 15, 0, tzinfo=NY_TZ))
+    daily_report.run_end_of_day(date(2026, 9, 24), broker=FakeBroker(100_000.0))
+    assert "needs-attention" not in posted

@@ -304,7 +304,9 @@ def build_daily_report(day: date, equity: float | None, positions: dict, prev_eq
         f"- **Trades:** {len(buys)} buy(s) ({_money(sum(t.get('value') or 0 for t in buys))}), "
         f"{len(sells)} sell(s) ({_money(sum(t.get('value') or 0 for t in sells))})"
     )
-    lines += _session_lines(records) or ["- No session records for today."]
+    lines += _session_lines(records)
+    for code in missed_sessions(records):
+        lines.append(f"- **{day.isoformat()} {SCHEDULED_SESSIONS[code]}:** DID NOT RUN — no runner started it (a technical fault, not a trading decision).")
     lines.append("")
 
     lines += _trade_sections(trades)
@@ -406,6 +408,30 @@ def publish_issue(title: str, body: str, rel_path: str, label: str) -> None:
     logger.info("Posted report as issue %s", resp.json().get("html_url"))
 
 
+SCHEDULED_SESSIONS = {"AM": "Morning rebalance", "PM": "Afternoon risk check"}
+
+
+def missed_sessions(records: list[dict]) -> list[str]:
+    """Scheduled sessions with no record at all for the day - i.e. no runner
+    started them (a failed trigger, an outage), as opposed to one that ran and
+    found nothing to do."""
+    ran = {r.get("session") for r in records if r.get("type") == "session"}
+    return [code for code in SCHEDULED_SESSIONS if code not in ran]
+
+
+def _alert_missed(day: date, missed: list[str]) -> None:
+    names = " and ".join(SCHEDULED_SESSIONS[c].lower() for c in missed)
+    body = (
+        f"The {names} did not run on {_long_date(day)}: no runner started it, so no trades or checks happened "
+        "in that window. This is a technical problem (a scheduler or trigger failure); Claude's scheduled check-in "
+        "will find the cause and fix it. Nothing is needed from you unless asked."
+    )
+    try:
+        publish_issue(f"⚠️ Trading agent needs attention — {day:%a %d %b} (session did not run)", body, "", "needs-attention")
+    except Exception:  # noqa: BLE001
+        logger.warning("Could not post the missed-session alert", exc_info=True)
+
+
 def run_end_of_day(day: date, broker=None) -> int:
     """Write (and publish) today's daily report, plus the 5-day report every fifth trading day."""
     if broker is None:
@@ -426,6 +452,10 @@ def run_end_of_day(day: date, broker=None) -> int:
     daily_path.write_text(daily, encoding="utf-8")
 
     rc = 0
+    missed = missed_sessions(decisions.read_records(day, day))
+    if missed:
+        logger.warning("Sessions that did not run today: %s", ", ".join(missed))
+        _alert_missed(day, missed)
     try:
         publish_issue(f"Daily trading report — {day:%a %d %b %Y}", daily, f"reports/daily/{daily_path.name}", "daily-report")
     except Exception:  # noqa: BLE001 - the saved file is the report of record
