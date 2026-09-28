@@ -8,6 +8,7 @@ class's allow_live constructor argument).
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 from datetime import datetime, timezone
 
@@ -16,7 +17,7 @@ import requests
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from config import API_KEYS, LIVE_TRADING_CONFIRM_VALUE, LIVE_TRADING_ENV_FLAG
-from execution.broker_base import Broker, Order, Position
+from execution.broker_base import Broker, Order, Position, format_qty
 
 logger = logging.getLogger(__name__)
 
@@ -65,9 +66,10 @@ class AlpacaBroker(Broker):
         for p in raw:
             out[p["symbol"]] = Position(
                 symbol=p["symbol"],
-                qty=int(float(p["qty"])),
+                qty=float(p["qty"]),
                 avg_entry_price=float(p["avg_entry_price"]),
                 current_price=float(p["current_price"]),
+                lastday_price=float(p["lastday_price"]) if p.get("lastday_price") else None,
             )
         return out
 
@@ -97,12 +99,15 @@ class AlpacaBroker(Broker):
             logger.warning("Could not fetch portfolio history for drawdown check", exc_info=True)
             return pd.Series(dtype=float)
 
-    def submit_order(self, symbol: str, qty: int, side: str) -> Order:
+    def submit_order(self, symbol: str, qty: float, side: str, limit_price: float | None = None) -> Order:
+        """A market order, or - with limit_price - a day limit order. The agent
+        uses marketable limits (a little through the current price) so a fast
+        market can't fill it at a much worse price than the one it planned on."""
         if qty <= 0:
             raise ValueError("qty must be positive")
         payload = {
             "symbol": symbol,
-            "qty": str(qty),
+            "qty": format_qty(qty),
             "side": side,
             "type": "market",
             "time_in_force": "day",
@@ -110,9 +115,62 @@ class AlpacaBroker(Broker):
             # tell its orders apart from anything else trading the account.
             "client_order_id": f"{AGENT_ORDER_PREFIX}{uuid.uuid4().hex[:20]}",
         }
-        resp = self._request("POST", "/v2/orders", json=payload)
-        logger.info("Submitted %s %s x%d -> order id %s, status %s", side, symbol, qty, resp.get("id"), resp.get("status"))
-        return Order(symbol=symbol, qty=qty, side=side, id=resp.get("id"), status=resp.get("status", "unknown"))
+        if limit_price is not None:
+            payload["type"] = "limit"
+            payload["limit_price"] = f"{limit_price:.2f}" if limit_price >= 1 else f"{limit_price:.4f}"
+        try:
+            resp = self._request("POST", "/v2/orders", json=payload)
+        except Exception:
+            if payload["type"] != "limit" or float(qty).is_integer():
+                raise
+            # A fractional quantity with a limit price was refused: send the same
+            # fractional quantity as a market order (always allowed) rather than
+            # not trading at all.
+            logger.warning("Fractional limit order for %s refused - resending as a market order", symbol, exc_info=True)
+            payload.pop("limit_price")
+            payload["type"] = "market"
+            payload["client_order_id"] = f"{AGENT_ORDER_PREFIX}{uuid.uuid4().hex[:20]}"
+            resp = self._request("POST", "/v2/orders", json=payload)
+        logger.info("Submitted %s %s x%s (%s) -> order id %s, status %s", side, symbol, payload["qty"], payload["type"], resp.get("id"), resp.get("status"))
+        return Order(symbol=symbol, qty=qty, side=side, order_type=payload["type"], id=resp.get("id"), status=resp.get("status", "unknown"))
+
+    FINAL_STATUSES = {"filled", "canceled", "expired", "rejected", "done_for_day", "replaced", "stopped", "suspended"}
+
+    def wait_for_orders(self, order_ids: list[str], timeout: float = 90, poll: float = 3) -> dict[str, dict]:
+        """Poll until every order is in a final state or the timeout passes.
+        Returns {order id: latest order JSON}. Never raises."""
+        latest: dict[str, dict] = {}
+        pending = [i for i in order_ids if i]
+        deadline = time.monotonic() + timeout
+        while pending:
+            for oid in list(pending):
+                try:
+                    latest[oid] = self._request("GET", f"/v2/orders/{oid}")
+                except Exception:  # noqa: BLE001
+                    logger.warning("Could not check order %s", oid, exc_info=True)
+                    continue
+                if latest[oid].get("status") in self.FINAL_STATUSES:
+                    pending.remove(oid)
+            if not pending or time.monotonic() > deadline:
+                break
+            time.sleep(poll)
+        return latest
+
+    def cancel_order(self, order_id: str) -> None:
+        try:
+            self._request("DELETE", f"/v2/orders/{order_id}")
+        except Exception:  # noqa: BLE001 - it may have filled in the meantime
+            logger.warning("Could not cancel order %s", order_id, exc_info=True)
+
+    def fractionable_symbols(self) -> set[str]:
+        """US stocks Alpaca lets us trade in fractions. Empty on error, which
+        just means whole shares for everything this run."""
+        try:
+            assets = self._request("GET", "/v2/assets", params={"status": "active", "asset_class": "us_equity"})
+            return {a["symbol"] for a in assets if a.get("fractionable") and a.get("tradable")}
+        except Exception:  # noqa: BLE001
+            logger.warning("Could not load fractionable assets - using whole shares this run", exc_info=True)
+            return set()
 
     def get_orders(self, after: datetime, limit: int = 500) -> list[dict]:
         """Every order (any status) submitted after `after`, newest first."""

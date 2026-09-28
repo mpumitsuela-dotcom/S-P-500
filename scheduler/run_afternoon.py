@@ -27,6 +27,7 @@ run didn't fire that day because the computer was offline).
 """
 from __future__ import annotations
 
+import math
 import sys
 import traceback
 from datetime import date, datetime
@@ -146,7 +147,8 @@ def main() -> int:
             sentiment_row = sentiment.loc[sym] if sym in sentiment.index else None
             flagged = bool(sentiment_row["flagged_negative"]) if sentiment_row is not None else False
             if flagged and intraday_move <= INTRADAY_DROP_THRESHOLD:
-                trim_qty = int(pos.qty * TRIM_FRACTION)
+                # Whole-share holdings are trimmed in whole shares; fractional ones to 3 decimals.
+                trim_qty = int(pos.qty * TRIM_FRACTION) if float(pos.qty).is_integer() else math.floor(pos.qty * TRIM_FRACTION * 1000) / 1000
                 if trim_qty > 0:
                     planned.append(
                         PlannedOrder(
@@ -168,7 +170,7 @@ def main() -> int:
             )
         else:
             logger.warning("Selling %d position(s) on the risk check (stop-loss: %s): %s", len(planned), sorted(stopped), [p.symbol for p in planned])
-            results = execute_orders(broker, planned)
+            results = execute_orders(broker, planned, quotes=latest_quotes, limit_buffer=STRATEGY.limit_order_buffer)
             for r in results:
                 logger.info("Order result: %s", r)
             record_trades(

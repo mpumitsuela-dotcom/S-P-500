@@ -31,7 +31,7 @@ class SimulationBroker(Broker):
     def is_market_open(self) -> bool:
         return True  # backtester controls the clock; always "open" when called
 
-    def submit_order(self, symbol: str, qty: int, side: str, price: float | None = None) -> Order:
+    def submit_order(self, symbol: str, qty: float, side: str, price: float | None = None) -> Order:
         if qty <= 0 or price is None:
             raise ValueError("SimulationBroker.submit_order requires qty>0 and an execution price")
 

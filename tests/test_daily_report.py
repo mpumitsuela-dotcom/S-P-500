@@ -15,8 +15,10 @@ def report_dirs(tmp_path, monkeypatch):
     monkeypatch.setattr(decisions, "DECISIONS_FILE", tmp_path / "data" / "decisions.jsonl")
     monkeypatch.setattr(daily_report, "DAILY_DIR", tmp_path / "daily")
     monkeypatch.setattr(daily_report, "WEEKLY_DIR", tmp_path / "weekly")
+    monkeypatch.setattr(daily_report, "CHARTS_DIR", tmp_path / "charts")
     monkeypatch.setattr(daily_report, "EQUITY_FILE", tmp_path / "data" / "equity.jsonl")
     monkeypatch.setattr(daily_report, "_trial_start_equity", lambda: 100_000.0)
+    monkeypatch.setattr(daily_report, "_trial_start_date", lambda: date(2026, 9, 23))
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     return tmp_path
 
@@ -205,3 +207,59 @@ def test_no_alert_when_both_sessions_ran(report_dirs, monkeypatch):
     decisions.record_session("PM", "no_trades", "ok", now=datetime(2026, 9, 24, 15, 0, tzinfo=NY_TZ))
     daily_report.run_end_of_day(date(2026, 9, 24), broker=FakeBroker(100_000.0))
     assert "needs-attention" not in posted
+
+
+def test_unfilled_order_and_fractional_shares_reported(report_dirs, monkeypatch):
+    monkeypatch.setattr(daily_report, "_spy_closes", lambda s, e: {})
+    now = datetime(2026, 9, 24, 9, 45, tzinfo=NY_TZ)
+    decisions.record_trades("AM", [
+        {"symbol": "BKNG", "side": "buy", "qty": 0.612, "status": "filled", "reason": "r", "fill_price": 5000.0},
+        {"symbol": "XYZ", "side": "buy", "qty": 0, "requested_qty": 10, "status": "unfilled_cancelled", "reason": "r"},
+    ], {}, now=now)
+    decisions.record_session("AM", "completed", "2 order(s) placed", now=now)
+    daily_report.run_end_of_day(date(2026, 9, 24), broker=FakeBroker(100_000.0))
+    text = (report_dirs / "daily" / "2026-09-24.md").read_text()
+    assert "BKNG — bought 0.612 shares at ~$5,000.00 ($3,060)" in text
+    assert "## Orders that did not fill" in text and "XYZ (buy): unfilled_cancelled" in text
+    assert "1 buy(s)" in text
+
+
+def test_daily_report_has_charts_and_position_statistics(report_dirs, monkeypatch):
+    monkeypatch.setattr(daily_report, "_spy_closes", lambda s, e: {"2026-09-22": 500.0, "2026-09-23": 501.0, "2026-09-24": 505.0})
+    daily_report._record_equity(date(2026, 9, 23), 100_200.0)
+    _record_day(date(2026, 9, 24))
+    daily_report.run_end_of_day(date(2026, 9, 24), broker=FakeBroker(100_500.0))
+    text = (report_dirs / "daily" / "2026-09-24.md").read_text()
+    for name in ("account-vs-sp500", "allocation", "gain-loss"):
+        assert f"](../charts/2026-09-24-{name}.png)" in text
+        assert (report_dirs / "charts" / f"2026-09-24-{name}.png").stat().st_size > 10_000
+    assert "| Stock | Shares | Avg cost | Price | Market value | % of account | Today | Gain/loss $ | Gain/loss % |" in text
+    assert "| AAPL | 10 | $300.00 | $330.00 | $3,300 | 3.3% |" in text
+    assert "| **Cash** |" in text and "| **Total account** | | | | **$100,500** |" in text
+
+
+def test_issue_body_links_charts_by_full_url(report_dirs, monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "t")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    sent = []
+
+    class Resp:
+        status_code = 201
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {}
+
+    monkeypatch.setattr(daily_report.requests, "post", lambda url, **kw: sent.append(kw["json"]["body"]) or Resp())
+    daily_report.publish_issue("t", "![Where the money is](../charts/2026-09-24-allocation.png)", "reports/daily/x.md", "daily-report")
+    assert "](https://github.com/owner/repo/raw/agent-state/reports/charts/2026-09-24-allocation.png)" in sent[0]
+
+
+def test_tie_with_the_index_is_worded_as_matched(report_dirs, monkeypatch):
+    monkeypatch.setattr(daily_report, "_spy_closes", lambda s, e: {"2026-09-23": 500.0, "2026-09-24": 496.0})
+    daily_report._record_equity(date(2026, 9, 23), 100_000.0)
+    daily_report.run_end_of_day(date(2026, 9, 24), broker=FakeBroker(99_200.0))
+    text = (report_dirs / "daily" / "2026-09-24.md").read_text()
+    assert "the agent matched the index" in text and "by 0.00%" not in text

@@ -95,6 +95,10 @@ class StrategyConfig:
     # the AM rebalance won't buy it back for stop_loss_cooldown_days.
     stop_loss_pct: float = float(os.environ.get("SP500_STOP_LOSS", "0.10"))
     stop_loss_cooldown_days: int = int(os.environ.get("SP500_STOP_LOSS_COOLDOWN_DAYS", "7"))
+    # Orders are marketable limits this far through the quote (0.5%): they fill
+    # like a market order in normal conditions but can't fill far away from
+    # the price the agent planned on. 0 = plain market orders.
+    limit_order_buffer: float = float(os.environ.get("SP500_LIMIT_BUFFER", "0.005"))
 
     # Turnover control - the PM session should NOT re-trade the full book;
     # it only acts on guard breaches or material overnight news, to avoid

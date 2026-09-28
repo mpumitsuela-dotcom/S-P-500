@@ -99,20 +99,23 @@ def _symbols_in(frame: pd.DataFrame | None) -> set[str]:
     return set(frame["symbol"]) if frame is not None and not frame.empty and "symbol" in frame.columns else set()
 
 
+def _latest_per_symbol(frame: pd.DataFrame) -> pd.DataFrame:
+    return frame.drop_duplicates("symbol", keep="last") if "symbol" in frame.columns else frame
+
+
 def _research_before_buying(logger, prices, sector_map, fundamentals, research, latest_quotes, held: set[str]):
     """
     The free-tier budgets only refresh fundamentals/research for a batch of the
     universe each run, so a stock outside today's batch would score neutral on
     research and could still be bought on price momentum alone. "Research"
-    here means Finnhub news + analyst ratings; FMP fundamentals are fetched
-    too but aren't required, because the free FMP plan doesn't cover every
-    stock. This:
+    here means Finnhub news + analyst ratings AND company financials (FMP, or
+    Finnhub where FMP's free plan has none). This:
 
       1. fetches the missing fundamentals + news/analyst research for every
          name the target portfolio wants, then re-ranks (new research can
          change the ranking and pull in other names), repeating for names
          not yet tried - up to RESEARCH_FETCH_ROUNDS fetches;
-      2. excludes any name that is not already held and still has no news/analyst research
+      2. excludes any name that is not already held and still has no news/analyst research or no financials
          (its fetch failed, or the round cap was hit), re-ranking until every
          name the portfolio would newly buy has been researched. Nothing is
          bought blind.
@@ -132,12 +135,14 @@ def _research_before_buying(logger, prices, sector_map, fundamentals, research, 
         return {s for s in wanted if s not in have_f or s not in have_r}
 
     def unresearched(scores):
-        """Target names with no news/analyst research. Only this blocks a buy:
-        FMP's free plan doesn't cover every stock, so missing fundamentals
-        just means a neutral value/quality score."""
+        """Target names missing news/analyst research OR company financials.
+        Either blocks a new buy: a stock with no financials would otherwise
+        score as exactly average on value and quality, i.e. be bought without
+        its numbers having been looked at. (Financials come from FMP, or from
+        Finnhub where FMP's free plan has none - data/fundamentals.py.)"""
         wanted = build_target_portfolio(scores, sector_map)["symbol"]
-        have_r = _symbols_in(research)
-        return {s for s in wanted if s not in have_r}
+        have_f, have_r = _symbols_in(fundamentals), _symbols_in(research)
+        return {s for s in wanted if s not in have_r or s not in have_f}
 
     attempted: set[str] = set()
     fetch_rounds = 0
@@ -152,9 +157,9 @@ def _research_before_buying(logger, prices, sector_map, fundamentals, research, 
             miss_r = sorted(s for s in to_fetch if s not in _symbols_in(research))
             logger.info("Researching before buying - fundamentals: %s; news/analysts: %s", miss_f, miss_r)
             if miss_f:
-                fundamentals = pd.concat([fundamentals, get_fundamentals(miss_f, max_new_symbols=len(miss_f))], ignore_index=True)
+                fundamentals = pd.concat([fundamentals, get_fundamentals(miss_f, max_new_symbols=len(miss_f))], ignore_index=True).pipe(_latest_per_symbol)
             if miss_r:
-                research = pd.concat([research, get_research_frame(miss_r, max_new_symbols=len(miss_r))], ignore_index=True)
+                research = pd.concat([research, get_research_frame(miss_r, max_new_symbols=len(miss_r))], ignore_index=True).pipe(_latest_per_symbol)
             continue  # re-rank with the new research
         blind = unresearched(ranked) - held
         if not blind:
@@ -238,7 +243,8 @@ def main() -> int:
                     "balance to the budget in the Alpaca dashboard.",
                     account_equity, STRATEGY.capital_budget,
                 )
-        orders = compute_rebalance_orders(target, current_positions, sizing_equity, latest_quotes)
+        fractionable = broker.fractionable_symbols()
+        orders = compute_rebalance_orders(target, current_positions, sizing_equity, latest_quotes, fractionable=fractionable)
         logger.info("Planned %d orders (realized vol %.1f%%, target %.1f%%)", len(orders), realized_vol * 100, STRATEGY.target_annual_vol * 100)
 
         target_summary = [
@@ -257,7 +263,7 @@ def main() -> int:
             for o in orders:
                 o.reason = explain_rebalance_decision(o.symbol, o.side, scores, research)
 
-            results = execute_orders(broker, orders)
+            results = execute_orders(broker, orders, quotes=latest_quotes, limit_buffer=STRATEGY.limit_order_buffer)
             for r in results:
                 logger.info("Order result: %s", r)
 

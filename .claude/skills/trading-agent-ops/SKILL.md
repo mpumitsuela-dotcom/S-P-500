@@ -28,6 +28,7 @@ Write to the owner in short, plain sentences, with no jargon. Money in dollars, 
   - **morning** 9:30–10:35 ET → `scheduler/run_morning.py`: the full research-ranked rebalance. It researches every target name before buying (`_research_before_buying`), and names with no research aren't newly bought.
   - **afternoon** 2:55–4:00 ET → `scheduler/run_afternoon.py`: a risk check only. It sells the whole holding when it is 10%+ below its purchase price (the owner-approved stop-loss, `SP500_STOP_LOSS`); the morning then won't buy that stock back for 7 days. Otherwise it trims 50% of a holding only when it has negative news AND is down ≥3% since entry.
   - **report** 4:10–5:00 ET, only on days a session ran → `execution/daily_report.py`: the daily report, plus the 5-day report every 5th trading day. Both are posted as GitHub issues.
+- Orders: fractional shares where Alpaca allows them; marketable limit orders 0.5% through the quote (`SP500_LIMIT_BUFFER`, a refused fractional limit is resent as a market order); sells are confirmed filled before buys are sent, and anything unfilled after 90s is cancelled and shown under "Orders that did not fill" in the report. A new buy needs both news/analyst research and company financials.
 - On a halt or crash, `execution/alerts.py` opens a `needs-attention` issue right away. `🟠 Decision needed` means an owner decision; `⚠️` means technical.
 - Safety guards live in `execution/guards.py`. A crash writes `.state/KILL_SWITCH`, which pauses all trading on every runner until it's cleared.
 

@@ -28,9 +28,13 @@ class FakeBroker:
     def get_portfolio_history(self, *a, **k):
         return pd.Series([100_000.0, 100_000.0])
 
-    def submit_order(self, symbol, qty, side):
+    def submit_order(self, symbol, qty, side, limit_price=None):
         self.orders.append((symbol, qty, side))
+        self.limits = getattr(self, "limits", []) + [limit_price]
         return Order(symbol, qty, side, status="accepted")
+
+    def fractionable_symbols(self):
+        return set()
 
 
 @pytest.fixture
@@ -184,14 +188,29 @@ def test_every_new_buy_is_researched_first(market, monkeypatch):
     assert set(session["excluded_unresearched"]) <= unresearchable
 
 
-def test_missing_fundamentals_alone_does_not_block_a_buy(market, monkeypatch):
-    """FMP's free plan doesn't cover every stock; news + analyst research is what's required."""
+def test_no_new_buy_without_company_financials(market, monkeypatch):
+    """A stock with no financials from FMP or Finnhub would score exactly average
+    on value and quality without its numbers being looked at - so it isn't newly bought."""
     tmp_path, symbols, research, _ = market
-    no_fmp = pd.DataFrame(columns=["symbol", "pe", "pb", "roe", "gross_margin", "debt_to_equity", "earnings_growth"])
-    monkeypatch.setattr(run_morning, "get_fundamentals", lambda syms, **k: no_fmp)
+    base = run_morning.get_fundamentals
+    no_numbers = set(symbols[:20])
+
+    def partial(syms, **k):
+        f = base(syms, **k)
+        return f[f["symbol"].isin(set(syms)) & ~f["symbol"].isin(no_numbers)]
+
+    monkeypatch.setattr(run_morning, "get_fundamentals", partial)
     broker = FakeBroker()
     monkeypatch.setattr(run_morning, "AlpacaBroker", lambda: broker)
     assert run_morning.main() == 0
-    assert len([o for o in broker.orders if o[2] == "buy"]) >= 5  # capped by the 35% per-session turnover limit
+    buys = {o[0] for o in broker.orders if o[2] == "buy"}
+    assert buys and not buys & no_numbers
     session = [r for r in _records(tmp_path) if r["type"] == "session"][-1]
-    assert session["excluded_unresearched"] == []
+    assert set(session["excluded_unresearched"]) <= no_numbers and session["excluded_unresearched"]
+
+
+def test_orders_are_marketable_limits(market, monkeypatch):
+    broker = FakeBroker()
+    monkeypatch.setattr(run_morning, "AlpacaBroker", lambda: broker)
+    assert run_morning.main() == 0
+    assert broker.orders and all(lp is not None for lp in broker.limits)

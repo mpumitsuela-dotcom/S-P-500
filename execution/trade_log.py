@@ -13,6 +13,8 @@ with it:
 """
 from __future__ import annotations
 
+from execution.broker_base import format_qty
+
 import csv
 from dataclasses import dataclass
 from datetime import datetime
@@ -30,7 +32,7 @@ class TradeLogEntry:
     session: str  # "AM" | "PM"
     symbol: str
     side: str
-    qty: int
+    qty: float
     status: str
     reason: str
 
@@ -59,7 +61,7 @@ def record_trades(entries: list[TradeLogEntry], now: datetime | None = None) -> 
 
     with MD_PATH.open("a") as f:
         for e in entries:
-            f.write(f"- **{now.strftime('%Y-%m-%d %H:%M')} ({e.session})** {e.side.upper()} {e.qty} {e.symbol} [{e.status}] — {e.reason}\n")
+            f.write(f"- **{now.strftime('%Y-%m-%d %H:%M')} ({e.session})** {e.side.upper()} {format_qty(e.qty)} {e.symbol} [{e.status}] — {e.reason}\n")
 
 
 def read_all_entries() -> list[dict]:

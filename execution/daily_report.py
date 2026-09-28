@@ -16,16 +16,19 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from collections import Counter
 from datetime import date, datetime, timedelta
 
 import requests
 
 from execution import decisions
+from execution.broker_base import format_qty
 from execution.decisions import NY_TZ, REPORTS_DIR
 
 logger = logging.getLogger("sp500_agent.reports")
 
+CHARTS_DIR = REPORTS_DIR / "charts"
 DAILY_DIR = REPORTS_DIR / "daily"
 WEEKLY_DIR = REPORTS_DIR / "weekly"
 EQUITY_FILE = REPORTS_DIR / "data" / "equity.jsonl"
@@ -83,8 +86,11 @@ def render_trade(rec: dict) -> list[str]:
     factors = research.get("factors") or {}
     side = rec["side"]
     price = rec.get("price")
-    head = f"### {rec['symbol']} — {'bought' if side == 'buy' else 'sold'} {rec['qty']} shares"
-    if price:
+    if not rec.get("qty"):
+        head = f"### {rec['symbol']} — {'buy' if side == 'buy' else 'sell'} order NOT filled"
+    else:
+        head = f"### {rec['symbol']} — {'bought' if side == 'buy' else 'sold'} {format_qty(rec['qty'])} shares"
+    if price and rec.get("qty"):
         head += f" at ~${price:,.2f} ({_money(rec.get('value'))})"
     status = rec.get("status", "")
     lines = [head, ""]
@@ -237,7 +243,7 @@ def _holdings_lines(positions: dict) -> list[str]:
         p = positions[sym]
         gain = p.current_price / p.avg_entry_price - 1 if p.avg_entry_price else None
         lines.append(
-            f"| {sym} | {p.qty} | ${p.avg_entry_price:,.2f} | ${p.current_price:,.2f} | "
+            f"| {sym} | {format_qty(p.qty)} | ${p.avg_entry_price:,.2f} | ${p.current_price:,.2f} | "
             f"{_money(p.market_value)} | {_pct(gain)} |"
         )
     return lines
@@ -263,9 +269,16 @@ def _session_lines(records: list[dict]) -> list[str]:
 
 
 def _trade_sections(trades: list[dict]) -> list[str]:
-    buys = [t for t in trades if t["side"] == "buy"]
-    sells = [t for t in trades if t["side"] == "sell"]
-    lines = ["## Why I bought", ""]
+    buys = [t for t in trades if t["side"] == "buy" and t.get("qty")]
+    sells = [t for t in trades if t["side"] == "sell" and t.get("qty")]
+    unfilled = [t for t in trades if not t.get("qty")]
+    lines = []
+    if unfilled:
+        lines += ["## Orders that did not fill", ""] + [
+            f"- {t['symbol']} ({t['side']}): {t.get('status', 'not filled')} — the price moved past the agent's limit "
+            "before it filled, so nothing was traded; it will be reconsidered at the next session." for t in unfilled
+        ] + [""]
+    lines += ["## Why I bought", ""]
     if buys:
         for t in sorted(buys, key=lambda t: -(t.get("value") or 0)):
             lines += render_trade(t)
@@ -282,11 +295,12 @@ def _trade_sections(trades: list[dict]) -> list[str]:
 
 # ---------- reports ----------
 
-def build_daily_report(day: date, equity: float | None, positions: dict, prev_equity: float | None, spy_day: float | None) -> str:
+def build_daily_report(day: date, equity: float | None, positions: dict, prev_equity: float | None, spy_day: float | None,
+                       visuals: tuple[list[str], list[str]] | None = None) -> str:
     records = decisions.read_records(day, day)
     trades = [r for r in records if r.get("type") == "trade"]
-    buys = [t for t in trades if t["side"] == "buy"]
-    sells = [t for t in trades if t["side"] == "sell"]
+    buys = [t for t in trades if t["side"] == "buy" and t.get("qty")]
+    sells = [t for t in trades if t["side"] == "sell" and t.get("qty")]
 
     lines = [f"# Daily trading report — {_long_date(day)}", "", "## Summary", ""]
     if equity is not None:
@@ -296,8 +310,12 @@ def build_daily_report(day: date, equity: float | None, positions: dict, prev_eq
             + (f" ({_money(equity - prev_equity, signed=True)}, {_pct(day_ret)} today)" if prev_equity else "")
         )
         if day_ret is not None and spy_day is not None:
-            verdict = "ahead of" if day_ret > spy_day else "behind"
-            lines.append(f"- **S&P 500 (SPY) today:** {_pct(spy_day)} — the agent was {verdict} the index by {abs(day_ret - spy_day):.2%}")
+            gap = day_ret - spy_day
+            if abs(gap) < 0.00005:  # rounds to 0.00%: say so rather than "ahead by 0.00%"
+                lines.append(f"- **S&P 500 (SPY) today:** {_pct(spy_day)} — the agent matched the index")
+            else:
+                verdict = "ahead of" if gap > 0 else "behind"
+                lines.append(f"- **S&P 500 (SPY) today:** {_pct(spy_day)} — the agent was {verdict} the index by {abs(gap):.2%}")
         elif spy_day is not None:
             lines.append(f"- **S&P 500 (SPY) today:** {_pct(spy_day)}")
     lines.append(
@@ -309,12 +327,16 @@ def build_daily_report(day: date, equity: float | None, positions: dict, prev_eq
         lines.append(f"- **{day.isoformat()} {SCHEDULED_SESSIONS[code]}:** DID NOT RUN — no runner started it (a technical fault, not a trading decision).")
     lines.append("")
 
+    charts, table = visuals or ([], [])
+    if charts:
+        lines += ["## Charts", ""] + [line for c in charts for line in (c, "")]
     lines += _trade_sections(trades)
-    lines += ["## Holdings at the close", ""] + _holdings_lines(positions) + ["", HONEST_NOTE, ""]
+    lines += ["## Holdings at the close", ""] + (table or _holdings_lines(positions)) + ["", HONEST_NOTE, ""]
     return "\n".join(lines)
 
 
-def build_period_report(days: list[date], equity_by_day: dict[str, float], start_equity: float | None, positions: dict, spy_closes: dict[str, float], day_number: int, risk_lines: list[str] | None = None) -> str:
+def build_period_report(days: list[date], equity_by_day: dict[str, float], start_equity: float | None, positions: dict, spy_closes: dict[str, float], day_number: int, risk_lines: list[str] | None = None,
+                        visuals: tuple[list[str], list[str]] | None = None) -> str:
     start, end = days[0], days[-1]
     records = decisions.read_records(start, end)
     trades = [r for r in records if r.get("type") == "trade"]
@@ -349,6 +371,9 @@ def build_period_report(days: list[date], equity_by_day: dict[str, float], start
     lines.append("")
 
     lines += risk_lines or []
+    charts, table = visuals or ([], [])
+    if charts:
+        lines += ["## Charts", ""] + [line for c in charts for line in (c, "")]
     lines += ["## What the research favoured", ""]
     if trades:
         drivers = Counter(_FACTOR_LABELS[k][0] for k in (_driver((t.get("research") or {}).get("factors") or {}) for t in buys) if k)
@@ -378,7 +403,7 @@ def build_period_report(days: list[date], equity_by_day: dict[str, float], start
     lines += ["## Sessions", ""] + (_session_lines(records) or ["- No session records."]) + [""]
     lines += ["# Key decisions and the research behind them", ""]
     lines += _trade_sections(trades)
-    lines += ["## Holdings at the end of the period", ""] + _holdings_lines(positions) + ["", HONEST_NOTE, ""]
+    lines += ["## Holdings at the end of the period", ""] + (table or _holdings_lines(positions)) + ["", HONEST_NOTE, ""]
     return "\n".join(lines)
 
 
@@ -391,6 +416,8 @@ def publish_issue(title: str, body: str, rel_path: str, label: str) -> None:
         return
     from scheduler.shared_state import STATE_BRANCH
 
+    # Charts are linked relative to the report file; an issue needs full URLs.
+    body = re.sub(r"\]\(\.\./charts/([^)]+)\)", rf"](https://github.com/{repo}/raw/{STATE_BRANCH}/reports/charts/\1)", body)
     if rel_path:
         link = f"https://github.com/{repo}/blob/{STATE_BRANCH}/{rel_path}"
         if len(body) > ISSUE_BODY_LIMIT:
@@ -433,6 +460,41 @@ def _alert_missed(day: date, missed: list[str]) -> None:
         logger.warning("Could not post the missed-session alert", exc_info=True)
 
 
+def _trial_start_date() -> date | None:
+    from execution.trial import TRIAL_START_DATE_FILE
+
+    try:
+        return date.fromisoformat(TRIAL_START_DATE_FILE.read_text().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def _visuals(day: date, equity: float, positions: dict) -> tuple[list[str], list[str]]:
+    """Charts + statistics table for the report (execution/report_charts.py). Never raises."""
+    try:
+        from execution import report_charts
+
+        rows = [r for r in _read_equity() if r["date"] <= day.isoformat()]
+        start_eq, start_day = _trial_start_equity(), _trial_start_date()
+        points = [(date.fromisoformat(r["date"]), r["equity"]) for r in rows]
+        spy_points = []
+        if start_eq and rows:
+            first = date.fromisoformat(rows[0]["date"])
+            anchor_day = start_day if start_day and start_day < first else first - timedelta(days=1)
+            points = [(anchor_day, start_eq)] + points
+            closes = _spy_closes(anchor_day - timedelta(days=10), day)
+            base = [d for d in sorted(closes) if d < first.isoformat()]
+            if base:
+                b = closes[base[-1]]
+                spy_points = [(anchor_day, start_eq)] + [
+                    (date.fromisoformat(r["date"]), start_eq * closes[r["date"]] / b) for r in rows if r["date"] in closes
+                ]
+        return report_charts.build(day, CHARTS_DIR, positions, equity, points, spy_points)
+    except Exception:  # noqa: BLE001
+        logger.warning("Could not build report visuals", exc_info=True)
+        return [], []
+
+
 def run_end_of_day(day: date, broker=None) -> int:
     """Write (and publish) today's daily report, plus the 5-day report every fifth trading day."""
     if broker is None:
@@ -447,7 +509,8 @@ def run_end_of_day(day: date, broker=None) -> int:
     _record_equity(day, equity)
 
     spy = _spy_closes(day - timedelta(days=21), day)
-    daily = build_daily_report(day, equity, positions, prev_equity, _spy_return(spy, day, day))
+    visuals = _visuals(day, equity, positions)
+    daily = build_daily_report(day, equity, positions, prev_equity, _spy_return(spy, day, day), visuals)
     DAILY_DIR.mkdir(parents=True, exist_ok=True)
     daily_path = DAILY_DIR / f"{day.isoformat()}.md"
     daily_path.write_text(daily, encoding="utf-8")
@@ -481,7 +544,7 @@ def run_end_of_day(day: date, broker=None) -> int:
             )
         except Exception:  # noqa: BLE001 - the scorecard must never stop the report
             logger.warning("Could not build the risk scorecard", exc_info=True)
-        period = build_period_report(days, equity_by_day, start_equity, positions, spy, len(trading_days), risk_lines)
+        period = build_period_report(days, equity_by_day, start_equity, positions, spy, len(trading_days), risk_lines, visuals)
         WEEKLY_DIR.mkdir(parents=True, exist_ok=True)
         period_path = WEEKLY_DIR / f"5-day-ending-{day.isoformat()}.md"
         period_path.write_text(period, encoding="utf-8")
