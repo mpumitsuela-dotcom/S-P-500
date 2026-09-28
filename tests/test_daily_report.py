@@ -255,3 +255,11 @@ def test_issue_body_links_charts_by_full_url(report_dirs, monkeypatch):
     monkeypatch.setattr(daily_report.requests, "post", lambda url, **kw: sent.append(kw["json"]["body"]) or Resp())
     daily_report.publish_issue("t", "![Where the money is](../charts/2026-09-24-allocation.png)", "reports/daily/x.md", "daily-report")
     assert "](https://github.com/owner/repo/raw/agent-state/reports/charts/2026-09-24-allocation.png)" in sent[0]
+
+
+def test_tie_with_the_index_is_worded_as_matched(report_dirs, monkeypatch):
+    monkeypatch.setattr(daily_report, "_spy_closes", lambda s, e: {"2026-09-23": 500.0, "2026-09-24": 496.0})
+    daily_report._record_equity(date(2026, 9, 23), 100_000.0)
+    daily_report.run_end_of_day(date(2026, 9, 24), broker=FakeBroker(99_200.0))
+    text = (report_dirs / "daily" / "2026-09-24.md").read_text()
+    assert "the agent matched the index" in text and "by 0.00%" not in text

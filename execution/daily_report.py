@@ -310,8 +310,12 @@ def build_daily_report(day: date, equity: float | None, positions: dict, prev_eq
             + (f" ({_money(equity - prev_equity, signed=True)}, {_pct(day_ret)} today)" if prev_equity else "")
         )
         if day_ret is not None and spy_day is not None:
-            verdict = "ahead of" if day_ret > spy_day else "behind"
-            lines.append(f"- **S&P 500 (SPY) today:** {_pct(spy_day)} — the agent was {verdict} the index by {abs(day_ret - spy_day):.2%}")
+            gap = day_ret - spy_day
+            if abs(gap) < 0.00005:  # rounds to 0.00%: say so rather than "ahead by 0.00%"
+                lines.append(f"- **S&P 500 (SPY) today:** {_pct(spy_day)} — the agent matched the index")
+            else:
+                verdict = "ahead of" if gap > 0 else "behind"
+                lines.append(f"- **S&P 500 (SPY) today:** {_pct(spy_day)} — the agent was {verdict} the index by {abs(gap):.2%}")
         elif spy_day is not None:
             lines.append(f"- **S&P 500 (SPY) today:** {_pct(spy_day)}")
     lines.append(
