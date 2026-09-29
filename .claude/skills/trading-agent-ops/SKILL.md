@@ -21,6 +21,10 @@ The owner also wants the agent to research properly before buying and to keep re
 
 Write to the owner in short, plain sentences, with no jargon. Money in dollars, returns in percent, times in New York time.
 
+## Memory between sessions
+
+Read `references/lessons-learned.md` first: it holds what earlier sessions learned, the open questions, and the rules for adding to it. After each evening check, append anything new. Strategy settings stay locked; lessons only propose changes for the trial end.
+
 ## How it runs
 
 - `.github/workflows/trading-agent.yml` fires every 15 min on weekdays in market hours and runs `scheduler/run_shared.py` as the **primary** runner. GitHub's cron is unreliable, so Claude routines ("Trading agent: kick …") also start the workflow at 9:45, 15:10 and 16:25 ET. The owner's PC may run the same script as the **backup** (`scripts/run_pc.bat`, 25 min head start for the cloud).
