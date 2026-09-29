@@ -1,0 +1,87 @@
+# Runs the forex agent in the cloud (GitHub Actions), Monday-Friday.
+#
+# The cron fires every 15 minutes across the US trading day (in UTC, covering
+# both summer and winter time). Each run asks Alpaca whether the market is
+# open, so holidays and early closes are handled automatically. See
+# fxagent/agent.py for what each run does.
+#
+# Memory between runs (trade decisions, research, reports, the kill switch)
+# lives on the `agent-state` branch.
+#
+# Required secrets: ALPACA_API_KEY_ID, ALPACA_API_SECRET_KEY (a PAPER account).
+# Optional secrets: FINNHUB_API_KEY, FRED_API_KEY, ANTHROPIC_API_KEY.
+name: forex-agent
+
+on:
+  schedule:
+    - cron: "7,22,37,52 13-21 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      check_only:
+        description: "Only test the connections (no trading)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write   # save state to the agent-state branch
+  issues: write     # post the daily report
+
+concurrency:
+  group: forex-agent
+  cancel-in-progress: false
+
+env:
+  ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
+  ALPACA_API_SECRET_KEY: ${{ secrets.ALPACA_API_SECRET_KEY }}
+  ALPACA_BASE_URL: https://paper-api.alpaca.markets
+  FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+  FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+  ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+  FX_STATE_DIR: state
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Load state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git ls-remote --exit-code --heads "$url" agent-state >/dev/null; then
+            git clone --quiet --depth 1 --branch agent-state "$url" state
+          else
+            mkdir state && git -C state init --quiet -b agent-state && git -C state remote add origin "$url"
+          fi
+
+      - name: Run agent
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ inputs.check_only }}" = "true" ]; then
+            python -m fxagent.check
+          else
+            python -m fxagent.agent
+          fi
+
+      - name: Save state
+        if: always()
+        run: |
+          cd state
+          git config user.name "forex-agent"
+          git config user.email "forex-agent@users.noreply.github.com"
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit --quiet -m "state $(date -u +%FT%H:%MZ)"
+            git push --quiet origin agent-state
+          fi
