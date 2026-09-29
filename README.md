@@ -1,6 +1,6 @@
 # sp500_agent
 
-> **Also in this repo:** a separate options agent that trades calls and puts on its own Alpaca paper account using Gemini research. See [OPTIONS_AGENT.md](OPTIONS_AGENT.md).
+> **Also in this repo:** a futures agent that goes long or short micro futures on a Tradovate demo account using Gemini research ([FUTURES_AGENT.md](FUTURES_AGENT.md)), and an options agent that trades calls and puts on its own Alpaca paper account ([OPTIONS_AGENT.md](OPTIONS_AGENT.md)).
 
 A research-grade, paper-trading S&P 500 factor investing agent: free data in,
 Alpaca paper-account execution out, with safety guards designed to fail

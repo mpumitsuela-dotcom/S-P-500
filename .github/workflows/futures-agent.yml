@@ -1,0 +1,87 @@
+# Runs the futures agent on a Tradovate DEMO (paper) account, every 30 minutes
+# on weekdays. futures_agent/run.py decides from New York time what is due:
+# checking open positions (9:45-15:50), the once-a-day research and trading
+# session (11:00-13:00), and the daily report (16:10-17:30).
+#
+# Required repo secrets:
+#   TRADOVATE_USERNAME, TRADOVATE_PASSWORD  Tradovate login
+#   TRADOVATE_CID, TRADOVATE_SECRET         API key (Application Settings -> API Access)
+#   GEMINI_API_KEY                          free key from https://aistudio.google.com/apikey
+#   FINNHUB_API_KEY                         (already set) company news and analysts
+#   ALPACA_API_KEY_ID / ALPACA_API_SECRET_KEY (already set) read-only price history and the
+#                                           market-holiday calendar; nothing is traded there
+# Without the Tradovate secrets every run exits in seconds and does nothing.
+#
+# State (positions, trades, research log, run clock, kill switch, reports) lives
+# on the `futures-agent-state` branch.
+name: futures-agent
+
+on:
+  schedule:
+    - cron: "17,47 13-21 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      force_session:
+        description: "Run this step now, even outside its time window (all safety checks still apply)"
+        type: choice
+        default: none
+        options: [none, manage, research, report]
+
+permissions:
+  contents: write   # push state to the futures-agent-state branch
+  issues: write     # daily reports and alerts as issues (GitHub emails them)
+
+concurrency:
+  group: futures-agent
+  cancel-in-progress: false
+
+env:
+  TRADOVATE_USERNAME: ${{ secrets.TRADOVATE_USERNAME }}
+  TRADOVATE_PASSWORD: ${{ secrets.TRADOVATE_PASSWORD }}
+  TRADOVATE_CID: ${{ secrets.TRADOVATE_CID }}
+  TRADOVATE_SECRET: ${{ secrets.TRADOVATE_SECRET }}
+  TRADOVATE_APP_ID: ${{ secrets.TRADOVATE_APP_ID || 'futures-agent' }}
+  TRADOVATE_BASE_URL: https://demo.tradovateapi.com/v1
+  GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+  FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY || secrets.FINNHUB }}
+  FINNHUB_CALLS_PER_MINUTE: "20"
+  ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
+  ALPACA_API_SECRET_KEY: ${{ secrets.ALPACA_API_SECRET_KEY }}
+  ALPACA_BASE_URL: https://paper-api.alpaca.markets
+  FUT_BUDGET: "10000"
+  FUT_RUN_DAYS: "61"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      # Manual runs ("Run workflow" button) first check every connection.
+      - name: Check connections
+        if: github.event_name == 'workflow_dispatch'
+        continue-on-error: true
+        run: python -m futures_agent.check
+
+      - name: Run futures agent
+        env:
+          FUT_FORCE_SESSION: ${{ github.event.inputs.force_session || 'none' }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python -m futures_agent.run
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: futures-logs-${{ github.run_id }}
+          path: logs/
+          if-no-files-found: ignore
+          retention-days: 30

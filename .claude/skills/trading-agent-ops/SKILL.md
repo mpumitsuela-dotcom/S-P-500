@@ -21,6 +21,10 @@ The owner also wants the agent to research properly before buying and to keep re
 
 Write to the owner in short, plain sentences, with no jargon. Money in dollars, returns in percent, times in New York time.
 
+## The separate futures agent
+
+`futures_agent/` goes long or short micro futures (MES, MNQ, MYM, M2K, MGC, MCL) on a **Tradovate demo** account ($10,000, two months), using the same Finnhub company research plus Gemini market research. Every position gets a stop and target (OCO) at Tradovate on entry, and `manage` re-places them if they're missing. Its own workflow (`futures-agent.yml`), state branch (`futures-agent-state`, files in `.state/futures/`), and `futures-report` issues; same owner rules. See `FUTURES_AGENT.md`.
+
 ## The separate options agent
 
 `options_agent/` is a second agent: it buys calls and puts on its **own Alpaca paper account** (secrets `OPT_ALPACA_*`, $10,000, two months), with research from Finnhub and Gemini (Google Search grounding). It has its own workflow (`options-agent.yml`), state branch (`options-agent-state`, files in `.state/options/`), daily `options-report` issues, and the same owner rules as the table above. Its kill switch (`.state/options/KILL_SWITCH`) blocks only new trades: exits keep running. See `OPTIONS_AGENT.md`. Everything below is about the S&P 500 agent.

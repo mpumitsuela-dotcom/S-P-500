@@ -97,6 +97,9 @@ def parse_verdict(text: str) -> dict:
         "catalysts": [str(c)[:200] for c in (raw.get("catalysts") or [])][:5],
         "risks": [str(r)[:200] for r in (raw.get("risks") or [])][:5],
         "next_earnings_date": earnings,
+        # Market-moving events (Fed, inflation, jobs reports...) - asked for by the futures agent.
+        "major_event_within_2_days": str(raw.get("major_event_within_2_days", False)).strip().lower() == "true",
+        "key_events": [str(e)[:200] for e in (raw.get("key_events") or [])][:5],
     }
 
 
@@ -142,9 +145,15 @@ def _sources(payload: dict) -> list[dict]:
 def research(symbol: str, company: str, today: date, facts: dict) -> dict:
     """Returns the verdict dict plus "model" and "sources". Raises
     GeminiUnavailable when no key is set or every model fails."""
+    return ask(build_prompt(symbol, company, today, facts), symbol)
+
+
+def ask(prompt: str, label: str) -> dict:
+    """Send any research prompt whose reply is the verdict JSON above; the
+    futures agent uses this with its own market-level prompt."""
     if not api_key():
         raise GeminiUnavailable("GEMINI_API_KEY is not set")
-    prompt = build_prompt(symbol, company, today, facts)
+    symbol = label
     last_error: Exception | None = None
     for model in MODELS:
         try:
