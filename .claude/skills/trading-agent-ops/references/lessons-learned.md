@@ -13,6 +13,7 @@ Read this before changing anything. A fresh Claude session knows nothing about t
 - Market-breadth score was 28.6 (Weakening) on 28 Sep: information only, the owner kept the 20% limit.
 
 ## Log (newest first)
+- **2026-09-29** Rank flip-flop confirmed: UNP and SPG were bought on 28 Sep (ranked #7 and #4 of 503, scores +0.72/+0.79) and sold on 29 Sep (ranked #75 and #38, scores +0.30/+0.41), a one-day round trip of about $5.7K each. Day return was still +0.1% vs SPY -0.1%. Cost is spread and slippage, not a loss on the trade itself. Locked settings, so watching; proposal for the trial end: a rebalance band so a holding is sold only when it falls well below the top-N cut-off. Open question: how often does this happen across 30 days?
 - **2026-09-29** Routine wake-ups all reach this session; a very large context makes every wake-up expensive (about $2-4 each). Watching; owner asked about a fresh session for routines.
 - **2026-09-28** Owner-run audit (AI Trading Bot Reality Checker) said FAIL: nothing yet proves an edge. Valid technical points were fixed (below); strategy points (stop-loss, drift threshold, legacy holdings) left to the owner.
 - **2026-09-28** Fixed after live trading: fractional shares (whole shares distorted sizing); marketable limit orders 0.5% (market fallback if refused); sells confirmed filled before buys; unfilled orders cancelled after 90 s; no new buy without financials as well as news and analyst research.
