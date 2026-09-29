@@ -85,7 +85,7 @@ def entry_decision(row: dict, verdict: dict, regime: dict, s: OptionsSettings, t
 # --- contract choice -----------------------------------------------------
 
 def bs_delta(spot: float, strike: float, years: float, vol: float, kind: str, rate: float = 0.04) -> float:
-    """Black-Scholes delta, used only when Alpaca's feed has no greeks."""
+    """Black-Scholes delta, used only when Tradier's chain has no greeks."""
     if years <= 0 or vol <= 0 or spot <= 0 or strike <= 0:
         return 0.0
     d1 = (math.log(spot / strike) + (rate + vol * vol / 2) * years) / (vol * math.sqrt(years))
@@ -112,21 +112,16 @@ class ContractChoice:
 
 
 def choose_contract(
-    contracts: list[dict], snapshots: dict[str, dict], spot: float, kind: str, today: date,
+    contracts: list[dict], spot: float, kind: str, today: date,
     max_premium_dollars: float, annual_vol: float, s: OptionsSettings,
 ) -> tuple[ContractChoice | None, str]:
     """Best contract: liquid, 30-60 days, delta nearest target, affordable.
-    Returns (choice, reason when none)."""
+    contracts: {symbol, strike, expiration, bid, ask, open_interest, delta, iv}
+    (options_agent/broker.py option_chain). Returns (choice, reason when none)."""
     usable: list[ContractChoice] = []
-    reasons = {"not tradable": 0, "no quote": 0, "spread too wide": 0, "open interest too low": 0, "delta out of range": 0, "too expensive": 0}
+    reasons = {"no quote": 0, "spread too wide": 0, "open interest too low": 0, "delta out of range": 0, "too expensive": 0}
     for c in contracts:
-        sym = c.get("symbol")
-        if not c.get("tradable", True):
-            reasons["not tradable"] += 1
-            continue
-        snap = snapshots.get(sym) or {}
-        q = snap.get("latestQuote") or {}
-        bid, ask = float(q.get("bp") or 0), float(q.get("ap") or 0)
+        bid, ask = float(c.get("bid") or 0), float(c.get("ask") or 0)
         if bid <= 0 or ask <= 0 or ask < bid:
             reasons["no quote"] += 1
             continue
@@ -134,17 +129,15 @@ def choose_contract(
         if (ask - bid) / mid > s.max_spread_pct:
             reasons["spread too wide"] += 1
             continue
-        oi = int(float(c.get("open_interest") or 0))
+        oi = int(c.get("open_interest") or 0)
         if oi < s.min_open_interest:
             reasons["open interest too low"] += 1
             continue
-        exp = date.fromisoformat(c["expiration_date"])
-        dte = (exp - today).days
-        strike = float(c["strike_price"])
-        delta = (snap.get("greeks") or {}).get("delta")
+        dte = (date.fromisoformat(c["expiration"]) - today).days
+        strike = float(c["strike"])
+        delta = c.get("delta")
         if delta is None:
-            iv = snap.get("impliedVolatility") or annual_vol
-            delta = bs_delta(spot, strike, dte / 365, float(iv), kind)
+            delta = bs_delta(spot, strike, dte / 365, float(c.get("iv") or annual_vol), kind)
         adelta = abs(float(delta))
         if not (s.min_delta <= adelta <= s.max_delta):
             reasons["delta out of range"] += 1
@@ -152,7 +145,7 @@ def choose_contract(
         if ask * 100 > max_premium_dollars:
             reasons["too expensive"] += 1
             continue
-        usable.append(ContractChoice(sym, c["expiration_date"], strike, kind, bid, ask, round(mid, 2), round(adelta, 3), oi, dte))
+        usable.append(ContractChoice(c["symbol"], c["expiration"], strike, kind, bid, ask, round(mid, 2), round(adelta, 3), oi, dte))
     if not usable:
         worst = ", ".join(f"{k}: {v}" for k, v in reasons.items() if v) or "no contracts listed"
         return None, f"no suitable contract ({worst})"
@@ -163,13 +156,13 @@ def choose_contract(
 
 def entry_limit_price(bid: float, ask: float) -> float:
     """Pay a little above the middle of the bid/ask, never the full ask."""
-    from options_agent.alpaca_options import tick_round
+    from options_agent.broker import tick_round
 
     return min(ask, tick_round((bid + ask) / 2 + 0.1 * (ask - bid), up=True))
 
 
 def exit_limit_price(bid: float, ask: float, urgent: bool) -> float:
-    from options_agent.alpaca_options import tick_round
+    from options_agent.broker import tick_round
 
     if bid <= 0:
         return 0.01

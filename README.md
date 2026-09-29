@@ -1,5 +1,7 @@
 # sp500_agent
 
+> **Also in this repo:** a separate options agent that trades calls and puts on a Tradier paper account using Gemini research. See [OPTIONS_AGENT.md](OPTIONS_AGENT.md).
+
 A research-grade, paper-trading S&P 500 factor investing agent: free data in,
 Alpaca paper-account execution out, with safety guards designed to fail
 closed rather than open.

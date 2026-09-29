@@ -21,6 +21,10 @@ The owner also wants the agent to research properly before buying and to keep re
 
 Write to the owner in short, plain sentences, with no jargon. Money in dollars, returns in percent, times in New York time.
 
+## The separate options agent
+
+`options_agent/` is a second agent: it buys calls and puts on a **Tradier sandbox** account ($10,000, two months), with research from Finnhub and Gemini (Google Search grounding). It has its own workflow (`options-agent.yml`), state branch (`options-agent-state`, files in `.state/options/`), daily `options-report` issues, and the same owner rules as the table above. Its kill switch (`.state/options/KILL_SWITCH`) blocks only new trades: exits keep running. See `OPTIONS_AGENT.md`. Everything below is about the S&P 500 agent.
+
 ## How it runs
 
 - `.github/workflows/trading-agent.yml` fires every 15 min on weekdays in market hours and runs `scheduler/run_shared.py` as the **primary** runner. GitHub's cron is unreliable, so Claude routines ("Trading agent: kick …") also start the workflow at 9:45, 15:10 and 16:25 ET. The owner's PC may run the same script as the **backup** (`scripts/run_pc.bat`, 25 min head start for the cloud).

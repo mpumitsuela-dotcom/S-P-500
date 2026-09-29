@@ -1,0 +1,80 @@
+# Runs the options (contracts) agent on a Tradier sandbox (paper) account,
+# every 30 minutes on weekdays. options_agent/run.py decides from New York time
+# what is due: managing held contracts (9:45-15:50), the once-a-day research
+# and buying session (11:00-13:00), and the daily report (16:10-17:30).
+#
+# Required repo secrets:
+#   TRADIER_ACCESS_TOKEN  Tradier sandbox access token
+#   TRADIER_ACCOUNT_ID    Tradier sandbox account number
+#   GEMINI_API_KEY        free key from https://aistudio.google.com/apikey
+#   FINNHUB_API_KEY       (already set for the S&P 500 agent) news, analysts, earnings dates
+# Without the Tradier secrets every run exits in seconds and does nothing.
+#
+# State (trades, research log, run clock, kill switch, reports) lives on the
+# `options-agent-state` branch, separate from the S&P 500 agent's.
+name: options-agent
+
+on:
+  schedule:
+    - cron: "11,41 13-21 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      force_session:
+        description: "Run this step now, even outside its time window (all safety checks still apply)"
+        type: choice
+        default: none
+        options: [none, manage, research, report]
+
+permissions:
+  contents: write   # push state to the options-agent-state branch
+  issues: write     # daily reports and alerts as issues (GitHub emails them)
+
+concurrency:
+  group: options-agent
+  cancel-in-progress: false
+
+env:
+  TRADIER_ACCESS_TOKEN: ${{ secrets.TRADIER_ACCESS_TOKEN }}
+  TRADIER_ACCOUNT_ID: ${{ secrets.TRADIER_ACCOUNT_ID }}
+  TRADIER_BASE_URL: https://sandbox.tradier.com/v1
+  GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+  FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY || secrets.FINNHUB }}
+  # Leave most of Finnhub's free 60/minute to the S&P 500 agent.
+  FINNHUB_CALLS_PER_MINUTE: "20"
+  OPT_BUDGET: "10000"
+  OPT_RUN_DAYS: "61"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      # Manual runs ("Run workflow" button) first check every connection.
+      - name: Check connections
+        if: github.event_name == 'workflow_dispatch'
+        continue-on-error: true
+        run: python -m options_agent.check
+
+      - name: Run options agent
+        env:
+          OPT_FORCE_SESSION: ${{ github.event.inputs.force_session || 'none' }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python -m options_agent.run
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: options-logs-${{ github.run_id }}
+          path: logs/
+          if-no-files-found: ignore
+          retention-days: 30

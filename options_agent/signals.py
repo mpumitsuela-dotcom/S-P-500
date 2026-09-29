@@ -108,12 +108,14 @@ def days_to_earnings(earnings_date: str | None, today: date) -> int | None:
 # --- data fetching (network) ---------------------------------------------
 
 def fetch_closes(symbols: list[str], today: date) -> dict[str, pd.Series]:
-    from data.alpaca_data import get_daily_bars
+    from options_agent import broker
 
-    bars = get_daily_bars(symbols, today - timedelta(days=150), today + timedelta(days=1))
     out = {}
-    for sym, g in bars.groupby("symbol"):
-        out[sym] = g.sort_values("date").set_index("date")["close"].astype(float)
+    for sym in symbols:
+        try:
+            out[sym] = broker.daily_closes(sym, today - timedelta(days=150), today)
+        except Exception as exc:  # noqa: BLE001 - one missing history skips that company only
+            logger.warning("Price history failed for %s: %s", sym, exc)
     return out
 
 

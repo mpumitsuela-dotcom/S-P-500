@@ -20,11 +20,14 @@ def _pct(x: float | None) -> str:
 
 def build(
     day: date, run: dict, equity: float, last_equity: float, positions: list[dict], trades: list[dict],
-    research: list[dict], spy_since_start: float | None, final: bool = False,
+    research: list[dict], spy_since_start: float | None, final: bool = False, budget: float | None = None,
 ) -> tuple[str, str]:
     start_eq = float(run.get("start_equity") or equity)
     since = equity - start_eq
-    since_pct = since / start_eq if start_eq else 0.0
+    # Measured on the money the agent trades with, so a sandbox that starts
+    # with more than the budget doesn't make the return look smaller.
+    base = min(start_eq, budget) if budget else start_eq
+    since_pct = since / base if base else 0.0
     today_chg = equity - last_equity
     end = date.fromisoformat(run["end_date"]) if run.get("end_date") else None
     days_left = (end - day).days if end else None
@@ -33,8 +36,8 @@ def build(
     lines = [
         f"# Options agent — {day:%A %d %B %Y}",
         "",
-        f"- **Account value:** {_money(equity)} ({_money(today_chg)} today)",
-        f"- **Since the start on {run.get('start_date')}:** {_money(since)} ({_pct(since_pct)})",
+        f"- **Account value:** {_money(equity)} ({_money(today_chg)} since the last report)",
+        f"- **Since the start on {run.get('start_date')}:** {_money(since)} ({_pct(since_pct)} of the {_money(base)} budget)",
         f"- **S&P 500 (SPY) over the same time:** {_pct(spy_since_start)}",
     ]
     if days_left is not None and not final:

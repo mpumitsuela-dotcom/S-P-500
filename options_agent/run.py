@@ -30,8 +30,8 @@ from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from config import API_KEYS, LOG_DIR, PROJECT_ROOT  # noqa: E402
-from options_agent import alpaca_options as alp  # noqa: E402
+from config import LOG_DIR, PROJECT_ROOT  # noqa: E402
+from options_agent import broker as alp  # noqa: E402
 from options_agent import gemini_research, journal, report, signals, strategy  # noqa: E402
 from options_agent.settings import SETTINGS as S  # noqa: E402
 from scheduler import shared_state  # noqa: E402
@@ -77,15 +77,16 @@ def alert(key: str, title: str, body: str, day: date, owner_decision: bool = Fal
 # --- positions -----------------------------------------------------------
 
 def held_positions(today: date) -> list[dict]:
-    """Alpaca option positions joined with the agent's own notes and live quotes."""
+    """Tradier option positions joined with the agent's own notes and live quotes."""
     raw = alp.get_option_positions()
     notes = journal.load("positions.json", {})
-    snaps = alp.get_snapshots([p["symbol"] for p in raw]) if raw else {}
+    snaps = alp.get_quotes([p["symbol"] for p in raw]) if raw else {}
     out = []
     for p in raw:
         occ = alp.parse_occ(p["symbol"])
         bid, ask = alp.quote_of(snaps.get(p["symbol"], {}))
-        mark = (bid + ask) / 2 if bid > 0 and ask > 0 else float(p.get("current_price") or 0)
+        last = float((snaps.get(p["symbol"]) or {}).get("last") or 0)
+        mark = (bid + ask) / 2 if bid > 0 and ask > 0 else (bid or last)
         entry = float(p.get("avg_entry_price") or 0)
         n = notes.get(p["symbol"], {})
         out.append({
@@ -107,7 +108,7 @@ def premium_at_risk(positions: list[dict]) -> float:
 
 
 def record_trade(day: date, side: str, symbol: str, label: str, qty: int, order: dict, reason: str, extra: dict | None = None) -> dict:
-    filled, price = alp.order_fill(order)
+    filled, price = order["filled_qty"], order["fill_price"]
     rec = {
         "date": day.isoformat(), "time": alp.now_iso(), "side": side, "symbol": symbol, "label": label,
         "qty": qty, "filled_qty": filled, "fill_price": price, "status": order.get("status"),
@@ -258,16 +259,15 @@ def research(today: date, run: dict, equity: float, account: dict, new_entries_a
 
         kind = strategy.kind_for(direction)
         spot = row["price"]
-        contracts = alp.list_contracts(sym, kind, today + timedelta(days=S.min_dte), today + timedelta(days=S.max_dte),
-                                       spot * 0.8, spot * 1.2)
-        snaps = alp.get_snapshots([c["symbol"] for c in contracts]) if contracts else {}
+        contracts = alp.option_chain(sym, kind, today + timedelta(days=S.min_dte), today + timedelta(days=S.max_dte),
+                                     spot * 0.8, spot * 1.2)
         cap = min(budget * S.max_premium_per_trade_pct, budget * S.max_total_premium_pct - premium_at_risk(positions))
-        choice, none_why = strategy.choose_contract(contracts, snaps, spot, kind, today, cap, row["annual_vol_pct"] / 100, S)
+        choice, none_why = strategy.choose_contract(contracts, spot, kind, today, cap, row["annual_vol_pct"] / 100, S)
         if not choice:
             journal.append("research.jsonl", {**rec, "decision": f"passed: agreed {direction}, but {none_why}"})
             continue
         qty, qty_why = strategy.contracts_to_buy(choice.ask, budget, premium_at_risk(positions), S)
-        buying_power = float(account.get("options_buying_power") or account.get("buying_power") or 0)
+        buying_power = float(account.get("option_buying_power") or 0)
         qty = min(qty, int(buying_power // (choice.ask * 100)))
         if qty < 1:
             journal.append("research.jsonl", {**rec, "decision": f"passed: {qty_why or 'not enough buying power'}"})
@@ -310,15 +310,18 @@ def daily_report(today: date, final: bool) -> None:
     account = alp.get_account()
     run = journal.load("run.json", {})
     positions = held_positions(today)
+    equity = float(account["equity"])
+    previous = float(run.get("last_report_equity") or run.get("start_equity") or equity)
     title, body = report.build(
-        today, run, float(account["equity"]), float(account.get("last_equity") or account["equity"]), positions,
+        today, run, equity, previous, positions,
         journal.read_lines("trades.jsonl", today), journal.read_lines("research.jsonl", today),
-        spy_return_since(date.fromisoformat(run["start_date"]), today) if run.get("start_date") else None, final,
+        spy_return_since(date.fromisoformat(run["start_date"]), today) if run.get("start_date") else None, final, S.budget,
     )
     rel = f"reports/options/daily/{today.isoformat()}.md"
     path = PROJECT_ROOT / rel
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(body)
+    journal.update_run(last_report_equity=equity)
     publish_issue(title, body, rel, "options-report")
 
 
@@ -349,8 +352,8 @@ def due_sessions(now_ny: datetime, market_open: bool, run: dict, force: str) -> 
 
 def main() -> int:
     setup_logging()
-    if not (API_KEYS.alpaca_key_id and API_KEYS.alpaca_secret_key):
-        logger.warning("No Alpaca keys for the options agent (OPTIONS_ALPACA_API_KEY_ID / OPTIONS_ALPACA_API_SECRET_KEY): nothing to do")
+    if not alp.configured():
+        logger.warning("TRADIER_ACCESS_TOKEN / TRADIER_ACCOUNT_ID are not set: nothing to do")
         return 0
     alp.ensure_paper()
     # Never the S&P 500 agent's `agent-state` branch: its own history and lock.
