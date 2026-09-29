@@ -199,7 +199,7 @@ def test_report_mentions_trades_and_sources():
     assert "Bought 2 × AAPL" in body and "[Reuters](https://example.com)" in body and "TSLA: earnings" in body
 
 
-# --- Tradier client (HTTP stubbed) ---------------------------------------
+# --- Alpaca client (HTTP stubbed) ----------------------------------------
 
 class _Resp:
     def __init__(self, payload, status=200):
@@ -210,10 +210,10 @@ class _Resp:
 
 
 @pytest.fixture
-def tradier(monkeypatch):
-    monkeypatch.setenv("TRADIER_ACCESS_TOKEN", "t")
-    monkeypatch.setenv("TRADIER_ACCOUNT_ID", "VA1")
-    monkeypatch.delenv("TRADIER_BASE_URL", raising=False)
+def api(monkeypatch):
+    monkeypatch.setenv("OPT_ALPACA_API_KEY_ID", "k")
+    monkeypatch.setenv("OPT_ALPACA_API_SECRET_KEY", "s")
+    monkeypatch.delenv("OPT_ALPACA_BASE_URL", raising=False)
     monkeypatch.setattr(alp, "MIN_SECONDS_BETWEEN_CALLS", 0)
     calls = []
     routes = {}
@@ -229,56 +229,69 @@ def tradier(monkeypatch):
     return routes, calls
 
 
-def test_refuses_live_tradier(monkeypatch):
-    monkeypatch.setenv("TRADIER_BASE_URL", "https://api.tradier.com/v1")
+def test_refuses_live_alpaca(monkeypatch):
+    monkeypatch.setenv("OPT_ALPACA_BASE_URL", "https://api.alpaca.markets")
     with pytest.raises(alp.NotPaperAccount):
         alp.ensure_paper()
 
 
-def test_positions_single_and_empty(tradier):
-    routes, _ = tradier
-    routes["/accounts/VA1/positions"] = {"positions": {"position": {"symbol": "AAPL261120C00230000", "quantity": 2, "cost_basis": 830.0}}}
-    pos = alp.get_option_positions()
-    assert pos == [{"symbol": "AAPL261120C00230000", "qty": 2.0, "avg_entry_price": 4.15}]
-    routes["/accounts/VA1/positions"] = {"positions": "null"}
-    assert alp.get_option_positions() == []
+def test_uses_its_own_keys_not_the_stock_agents(api, monkeypatch):
+    monkeypatch.setenv("ALPACA_API_KEY_ID", "stock-agent-key")
+    monkeypatch.delenv("OPT_ALPACA_API_KEY_ID")
+    assert not alp.configured()
 
 
-def test_balances_margin_and_cash(tradier):
-    routes, _ = tradier
-    routes["/balances"] = {"balances": {"total_equity": 10000, "account_type": "margin", "margin": {"option_buying_power": 9000}}}
-    assert alp.get_account()["option_buying_power"] == 9000
-    routes["/balances"] = {"balances": {"total_equity": 10000, "account_type": "cash", "cash": {"cash_available": 7000}}}
-    assert alp.get_account()["option_buying_power"] == 7000
+def test_positions_only_options(api):
+    routes, _ = api
+    routes["/v2/positions"] = [
+        {"symbol": "AAPL261120C00230000", "asset_class": "us_option", "qty": "2", "avg_entry_price": "4.15"},
+        {"symbol": "AAPL", "asset_class": "us_equity", "qty": "10", "avg_entry_price": "230"},
+    ]
+    assert alp.get_option_positions() == [{"symbol": "AAPL261120C00230000", "qty": 2.0, "avg_entry_price": 4.15}]
 
 
-def test_option_chain_filters_and_normalises(tradier):
-    routes, _ = tradier
-    routes["/markets/options/expirations"] = {"expirations": {"date": ["2026-10-09", "2026-11-06", "2026-11-20"]}}
-    routes["/markets/options/chains"] = {"options": {"option": [
-        {"symbol": "AAPL261120C00230000", "option_type": "call", "strike": 230, "expiration_date": "2026-11-20",
-         "bid": 4.0, "ask": 4.2, "open_interest": 900, "greeks": {"delta": 0.52, "mid_iv": 0.28}},
-        {"symbol": "AAPL261120P00230000", "option_type": "put", "strike": 230, "bid": 4.0, "ask": 4.2},
-        {"symbol": "AAPL261120C00400000", "option_type": "call", "strike": 400, "bid": 0.1, "ask": 0.2},
-    ]}}
+def test_account(api):
+    routes, _ = api
+    routes["/v2/account"] = {"equity": "10000", "options_buying_power": "9000", "options_trading_level": 3}
+    assert alp.get_account() == {"equity": 10000.0, "option_buying_power": 9000.0, "options_level": 3}
+
+
+def test_option_chain_joins_contracts_and_quotes(api):
+    routes, calls = api
+    routes["/v2/options/contracts"] = {"option_contracts": [
+        {"symbol": "AAPL261120C00230000", "strike_price": "230", "expiration_date": "2026-11-20", "open_interest": "900", "tradable": True},
+        {"symbol": "AAPL261120C00240000", "strike_price": "240", "expiration_date": "2026-11-20", "tradable": False},
+    ]}
+    routes["/v1beta1/options/snapshots"] = {"snapshots": {"AAPL261120C00230000": {
+        "latestQuote": {"bp": 4.0, "ap": 4.2}, "greeks": {"delta": 0.52}, "impliedVolatility": 0.28}}}
     chain = alp.option_chain("AAPL", "call", date(2026, 10, 31), date(2026, 11, 30), 180, 280)
-    assert [c["symbol"] for c in chain] == ["AAPL261120C00230000"] * 2  # two expirations in the window
-    assert chain[0]["delta"] == 0.52 and chain[0]["open_interest"] == 900
+    assert chain == [{"symbol": "AAPL261120C00230000", "strike": 230.0, "expiration": "2026-11-20", "bid": 4.0, "ask": 4.2,
+                      "open_interest": 900, "delta": 0.52, "iv": 0.28}]
+    assert calls[0][2]["params"]["type"] == "call"
 
 
-def test_order_fill_and_unfilled_cancel(tradier, monkeypatch):
-    routes, calls = tradier
+def test_daily_closes(api):
+    routes, _ = api
+    routes["/v2/stocks/SPY/bars"] = {"bars": [{"t": "2026-09-28T04:00:00Z", "c": 600.0}, {"t": "2026-09-29T04:00:00Z", "c": 601.5}]}
+    s = alp.daily_closes("SPY", date(2026, 9, 20), date(2026, 9, 29))
+    assert list(s.values) == [600.0, 601.5]
+
+
+def test_order_fill_and_unfilled_cancel(api, monkeypatch):
+    routes, calls = api
     monkeypatch.setattr(alp.time, "sleep", lambda s: None)
-    routes["/accounts/VA1/orders"] = {"order": {"id": 7, "status": "ok"}}
-    routes["/accounts/VA1/orders/7"] = {"order": {"id": 7, "status": "filled", "exec_quantity": 2, "avg_fill_price": 4.1}}
+    routes["/v2/orders"] = {"id": "o1", "status": "accepted"}
+    routes["/v2/orders/o1"] = {"id": "o1", "status": "filled", "filled_qty": "2", "filled_avg_price": "4.10"}
     o = alp.submit_and_wait("AAPL261120C00230000", 2, "buy", 4.15, wait_seconds=5)
-    assert o == {"id": 7, "status": "filled", "filled_qty": 2, "fill_price": 4.1}
-    sent = calls[0][2]["data"]
-    assert sent["side"] == "buy_to_open" and sent["symbol"] == "AAPL" and sent["option_symbol"] == "AAPL261120C00230000"
+    assert o == {"id": "o1", "status": "filled", "filled_qty": 2, "fill_price": 4.1}
+    sent = calls[0][2]["json"]
+    assert sent["position_intent"] == "buy_to_open" and sent["type"] == "limit" and sent["limit_price"] == "4.15"
 
-    routes["/accounts/VA1/orders/7"] = {"order": {"id": 7, "status": "open", "exec_quantity": 0}}
+    routes["/v2/orders/o1"] = {"id": "o1", "status": "new", "filled_qty": "0"}
     o = alp.submit_and_wait("AAPL261120C00230000", 2, "sell", 4.0, wait_seconds=0)
     assert o["filled_qty"] == 0 and any(m == "DELETE" for m, _, _ in calls)
+    posts = [kw["json"] for m, _, kw in calls if m == "POST"]
+    assert posts[-1]["position_intent"] == "sell_to_close"
 
 
 # --- a whole day, broker and research stubbed ----------------------------

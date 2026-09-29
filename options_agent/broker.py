@@ -1,15 +1,15 @@
 """
-Tradier brokerage client for the options agent: account, market clock,
-option positions, price history, option chains (with greeks), quotes and
-orders.
+Alpaca client for the options agent: account, market clock, option
+positions, price history, option chains (with greeks), quotes and orders.
 
-Paper trading uses Tradier's free sandbox (https://sandbox.tradier.com/v1),
-whose market data is delayed 15 minutes. Docs: https://documentation.tradier.com/brokerage-api
+It uses its OWN Alpaca paper account, separate from the S&P 500 agent's, so
+the two agents never see or trade each other's positions:
+  OPT_ALPACA_API_KEY_ID      paper key of the options account
+  OPT_ALPACA_API_SECRET_KEY  its secret
+  OPT_ALPACA_BASE_URL        defaults to the paper endpoint; anything else is refused
 
-Settings (GitHub secrets for the workflow, or a local .env):
-  TRADIER_ACCESS_TOKEN   the sandbox access token
-  TRADIER_ACCOUNT_ID     the sandbox account number (e.g. VA12345678)
-  TRADIER_BASE_URL       defaults to the sandbox; this agent refuses anything else
+Options market data comes from Alpaca's free "indicative" feed. Docs:
+  https://docs.alpaca.markets/docs/options-trading
 
 The agent only ever BUYS to open (calls or puts) and SELLS to close, so it
 never writes options and the most any position can lose is what it paid.
@@ -21,7 +21,7 @@ import os
 import re
 import time
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 
 import pandas as pd
 import requests
@@ -29,7 +29,8 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 logger = logging.getLogger("options_agent.broker")
 
-SANDBOX_URL = "https://sandbox.tradier.com/v1"
+PAPER_URL = "https://paper-api.alpaca.markets"
+DATA_URL = "https://data.alpaca.markets"
 OCC_RE = re.compile(r"^([A-Z.]{1,6})(\d{6})([CP])(\d{8})$")
 
 
@@ -41,26 +42,26 @@ class _Transient(RuntimeError):
     pass
 
 
-def token() -> str:
-    return os.environ.get("TRADIER_ACCESS_TOKEN", "")
+def key_id() -> str:
+    return os.environ.get("OPT_ALPACA_API_KEY_ID", "")
 
 
-def account_id() -> str:
-    return os.environ.get("TRADIER_ACCOUNT_ID", "")
+def secret() -> str:
+    return os.environ.get("OPT_ALPACA_API_SECRET_KEY", "")
 
 
 def base_url() -> str:
-    return os.environ.get("TRADIER_BASE_URL", SANDBOX_URL).rstrip("/")
+    return os.environ.get("OPT_ALPACA_BASE_URL", PAPER_URL).rstrip("/")
 
 
 def configured() -> bool:
-    return bool(token() and account_id())
+    return bool(key_id() and secret())
 
 
 def ensure_paper() -> None:
     """This agent is paper-only. There is no switch to make it trade real money."""
-    if "sandbox.tradier.com" not in base_url():
-        raise NotPaperAccount(f"TRADIER_BASE_URL must be the sandbox ({SANDBOX_URL}), got {base_url()!r}")
+    if "paper-api.alpaca.markets" not in base_url():
+        raise NotPaperAccount(f"OPT_ALPACA_BASE_URL must be the paper endpoint ({PAPER_URL}), got {base_url()!r}")
 
 
 @dataclass(frozen=True)
@@ -80,16 +81,8 @@ def parse_occ(symbol: str) -> OccSymbol:
     return OccSymbol(root, exp, "call" if cp == "C" else "put", int(strike) / 1000)
 
 
-def as_list(x) -> list:
-    """Tradier returns a single object instead of a one-item list, and the
-    string "null" instead of an empty list."""
-    if not x or x == "null":
-        return []
-    return x if isinstance(x, list) else [x]
-
-
-# The sandbox allows about 60 requests a minute; stay just under it.
-MIN_SECONDS_BETWEEN_CALLS = float(os.environ.get("TRADIER_MIN_SECONDS_BETWEEN_CALLS", "1.05"))
+# Alpaca allows 200 requests a minute; stay well under it.
+MIN_SECONDS_BETWEEN_CALLS = float(os.environ.get("OPT_ALPACA_MIN_SECONDS_BETWEEN_CALLS", "0.35"))
 _last_call = 0.0
 
 
@@ -107,66 +100,74 @@ def _throttle() -> None:
     retry=retry_if_exception_type((_Transient, requests.ConnectionError, requests.Timeout)),
     reraise=True,
 )
-def _request(method: str, path: str, **kwargs) -> dict:
+def _request(method: str, url: str, **kwargs):
     ensure_paper()
     _throttle()
     resp = requests.request(
-        method, f"{base_url()}{path}",
-        headers={"Authorization": f"Bearer {token()}", "Accept": "application/json"}, timeout=30, **kwargs,
+        method, url, headers={"APCA-API-KEY-ID": key_id(), "APCA-API-SECRET-KEY": secret()}, timeout=30, **kwargs
     )
     if resp.status_code == 429 or resp.status_code >= 500:
-        raise _Transient(f"Tradier {resp.status_code} on {path}")
+        raise _Transient(f"Alpaca {resp.status_code} on {url}")
     if resp.status_code >= 400:
-        raise RuntimeError(f"Tradier {resp.status_code} on {method} {path}: {resp.text[:300]}")
+        raise RuntimeError(f"Alpaca {resp.status_code} on {method} {url}: {resp.text[:300]}")
     return resp.json() if resp.content else {}
+
+
+def _trading(method: str, path: str, **kwargs):
+    return _request(method, f"{base_url()}{path}", **kwargs)
+
+
+def _data(path: str, params: dict):
+    return _request("GET", f"{DATA_URL}{path}", params=params)
 
 
 # --- account ------------------------------------------------------------
 
 def get_account() -> dict:
-    """{"equity", "option_buying_power", "account_type"}."""
-    b = _request("GET", f"/accounts/{account_id()}/balances").get("balances") or {}
-    kind = b.get("account_type", "")
-    if kind == "cash":
-        bp = (b.get("cash") or {}).get("cash_available")
-    else:
-        bp = (b.get(kind) or b.get("margin") or {}).get("option_buying_power")
+    """{"equity", "option_buying_power", "options_level"}."""
+    a = _trading("GET", "/v2/account")
+    bp = a.get("options_buying_power")
     return {
-        "equity": float(b.get("total_equity") or 0),
-        "option_buying_power": float(bp if bp is not None else b.get("total_cash") or 0),
-        "account_type": kind,
+        "equity": float(a.get("equity") or 0),
+        "option_buying_power": float(bp if bp is not None else a.get("buying_power") or 0),
+        "options_level": a.get("options_trading_level"),
     }
 
 
 def get_clock() -> dict:
-    c = _request("GET", "/markets/clock").get("clock") or {}
-    return {"is_open": c.get("state") == "open", "state": c.get("state"), "description": c.get("description", "")}
+    c = _trading("GET", "/v2/clock")
+    return {"is_open": bool(c.get("is_open")), "description": f"open={c.get('is_open')} next_open={c.get('next_open')}"}
 
 
 def get_option_positions() -> list[dict]:
-    """[{symbol, qty, avg_entry_price}] for option positions (price per share,
-    i.e. per 1/100th of a contract, like a quote)."""
-    payload = _request("GET", f"/accounts/{account_id()}/positions").get("positions")
+    """[{symbol, qty, avg_entry_price}] (price per share, i.e. per 1/100th of a contract)."""
     out = []
-    for p in as_list((payload or {}).get("position") if isinstance(payload, dict) else payload):
-        if not OCC_RE.match(p.get("symbol", "")):
+    for p in _trading("GET", "/v2/positions") or []:
+        if p.get("asset_class") != "us_option":
             continue
-        qty = float(p.get("quantity") or 0)
-        if qty == 0:
-            continue
-        out.append({"symbol": p["symbol"], "qty": qty, "avg_entry_price": abs(float(p.get("cost_basis") or 0)) / (abs(qty) * 100)})
+        qty = float(p.get("qty") or 0)
+        if qty:
+            out.append({"symbol": p["symbol"], "qty": qty, "avg_entry_price": float(p.get("avg_entry_price") or 0)})
     return out
 
 
 # --- market data ---------------------------------------------------------
 
-def get_quotes(symbols: list[str], greeks: bool = False) -> dict[str, dict]:
+def _snapshots(symbols: list[str]) -> dict[str, dict]:
     out: dict[str, dict] = {}
     for i in range(0, len(symbols), 100):
         batch = symbols[i : i + 100]
-        payload = _request("POST", "/markets/quotes", data={"symbols": ",".join(batch), "greeks": str(greeks).lower()})
-        for q in as_list((payload.get("quotes") or {}).get("quote")):
-            out[q["symbol"]] = q
+        payload = _data("/v1beta1/options/snapshots", {"symbols": ",".join(batch), "feed": "indicative"})
+        out.update(payload.get("snapshots") or {})
+    return out
+
+
+def get_quotes(symbols: list[str]) -> dict[str, dict]:
+    """{option symbol: {bid, ask, last}}."""
+    out = {}
+    for sym, s in _snapshots(symbols).items():
+        q, t = s.get("latestQuote") or {}, s.get("latestTrade") or {}
+        out[sym] = {"bid": float(q.get("bp") or 0), "ask": float(q.get("ap") or 0), "last": float(t.get("p") or 0)}
     return out
 
 
@@ -175,38 +176,48 @@ def quote_of(q: dict) -> tuple[float, float]:
 
 
 def daily_closes(symbol: str, start: date, end: date) -> pd.Series:
-    payload = _request("GET", "/markets/history", params={"symbol": symbol, "interval": "daily", "start": start.isoformat(), "end": end.isoformat()})
-    days = as_list((payload.get("history") or {}).get("day") if isinstance(payload.get("history"), dict) else None)
-    if not days:
-        return pd.Series(dtype=float)
-    s = pd.Series({pd.Timestamp(d["date"]): float(d["close"]) for d in days if d.get("close") is not None})
-    return s.sort_index()
+    rows, token = {}, None
+    while True:
+        params = {"timeframe": "1Day", "start": start.isoformat(), "end": end.isoformat(), "feed": "iex", "limit": 10000}
+        if token:
+            params["page_token"] = token
+        payload = _data(f"/v2/stocks/{symbol}/bars", params)
+        for b in payload.get("bars") or []:
+            rows[pd.Timestamp(b["t"][:10])] = float(b["c"])
+        token = payload.get("next_page_token")
+        if not token:
+            break
+    return pd.Series(rows, dtype=float).sort_index()
 
 
-def option_chain(underlying: str, kind: str, exp_from: date, exp_to: date, strike_lo: float, strike_hi: float, max_expirations: int = 4) -> list[dict]:
+def option_chain(underlying: str, kind: str, exp_from: date, exp_to: date, strike_lo: float, strike_hi: float) -> list[dict]:
     """Contracts with quotes and greeks, normalised to
     {symbol, strike, expiration, bid, ask, open_interest, delta, iv}."""
-    payload = _request("GET", "/markets/options/expirations", params={"symbol": underlying})
-    dates = [d for d in as_list((payload.get("expirations") or {}).get("date")) if exp_from.isoformat() <= d <= exp_to.isoformat()]
-    if len(dates) > max_expirations:  # spread the picks across the window
-        step = (len(dates) - 1) / (max_expirations - 1)
-        dates = [dates[round(i * step)] for i in range(max_expirations)]
+    contracts, token = [], None
+    while True:
+        params = {
+            "underlying_symbols": underlying, "type": kind, "status": "active",
+            "expiration_date_gte": exp_from.isoformat(), "expiration_date_lte": exp_to.isoformat(),
+            "strike_price_gte": f"{strike_lo:.2f}", "strike_price_lte": f"{strike_hi:.2f}", "limit": 1000,
+        }
+        if token:
+            params["page_token"] = token
+        payload = _trading("GET", "/v2/options/contracts", params=params)
+        contracts.extend(c for c in payload.get("option_contracts") or [] if c.get("tradable", True))
+        token = payload.get("next_page_token")
+        if not token:
+            break
+    snaps = _snapshots([c["symbol"] for c in contracts]) if contracts else {}
     out = []
-    for exp in dates:
-        chain = _request("GET", "/markets/options/chains", params={"symbol": underlying, "expiration": exp, "greeks": "true"})
-        for o in as_list((chain.get("options") or {}).get("option")):
-            if o.get("option_type") != kind:
-                continue
-            strike = float(o.get("strike") or 0)
-            if not (strike_lo <= strike <= strike_hi):
-                continue
-            g = o.get("greeks") or {}
-            out.append({
-                "symbol": o["symbol"], "strike": strike, "expiration": o.get("expiration_date", exp),
-                "bid": float(o.get("bid") or 0), "ask": float(o.get("ask") or 0),
-                "open_interest": int(o.get("open_interest") or 0),
-                "delta": g.get("delta"), "iv": g.get("mid_iv") or g.get("smv_vol"),
-            })
+    for c in contracts:
+        s = snaps.get(c["symbol"]) or {}
+        q = s.get("latestQuote") or {}
+        out.append({
+            "symbol": c["symbol"], "strike": float(c["strike_price"]), "expiration": c["expiration_date"],
+            "bid": float(q.get("bp") or 0), "ask": float(q.get("ap") or 0),
+            "open_interest": int(float(c.get("open_interest") or 0)),
+            "delta": (s.get("greeks") or {}).get("delta"), "iv": s.get("impliedVolatility"),
+        })
     return out
 
 
@@ -224,38 +235,35 @@ def _normalise_order(o: dict) -> dict:
     return {
         "id": o.get("id"),
         "status": o.get("status"),
-        "filled_qty": int(float(o.get("exec_quantity") or 0)),
-        "fill_price": float(o.get("avg_fill_price") or 0),
+        "filled_qty": int(float(o.get("filled_qty") or 0)),
+        "fill_price": float(o.get("filled_avg_price") or 0),
     }
 
 
 def submit(symbol: str, qty: int, side: str, limit_price: float) -> dict:
-    occ = parse_occ(symbol)
     body = {
-        "class": "option",
-        "symbol": occ.underlying,
-        "option_symbol": symbol,
-        "side": "buy_to_open" if side == "buy" else "sell_to_close",
-        "quantity": str(int(qty)),
+        "symbol": symbol,
+        "qty": str(int(qty)),
+        "side": side,
         "type": "limit",
-        "duration": "day",
-        "price": f"{limit_price:.2f}",
+        "limit_price": f"{limit_price:.2f}",
+        "time_in_force": "day",
+        "position_intent": "buy_to_open" if side == "buy" else "sell_to_close",
     }
-    resp = _request("POST", f"/accounts/{account_id()}/orders", data=body)
-    order = resp.get("order") or {}
+    order = _trading("POST", "/v2/orders", json=body)
     if not order.get("id"):
-        raise RuntimeError(f"Tradier did not accept the order for {symbol}: {resp}")
-    logger.info("Submitted %s %d %s @ %.2f -> order %s", body["side"], qty, symbol, limit_price, order["id"])
+        raise RuntimeError(f"Alpaca did not accept the order for {symbol}: {order}")
+    logger.info("Submitted %s %d %s @ %.2f -> order %s", body["position_intent"], qty, symbol, limit_price, order["id"])
     return order
 
 
 def get_order(order_id) -> dict:
-    return _normalise_order(_request("GET", f"/accounts/{account_id()}/orders/{order_id}").get("order") or {})
+    return _normalise_order(_trading("GET", f"/v2/orders/{order_id}"))
 
 
 def cancel(order_id) -> None:
     try:
-        _request("DELETE", f"/accounts/{account_id()}/orders/{order_id}")
+        _trading("DELETE", f"/v2/orders/{order_id}")
     except RuntimeError as exc:  # already filled or cancelled
         logger.info("Cancel %s: %s", order_id, exc)
 
@@ -279,7 +287,3 @@ def submit_and_wait(symbol: str, qty: int, side: str, limit_price: float, wait_s
 
 def now_iso() -> str:
     return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
-
-
-def lookback_start(today: date, days: int = 150) -> date:
-    return today - timedelta(days=days)

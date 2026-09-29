@@ -1,8 +1,8 @@
-# Options agent (Tradier, $10,000, two months)
+# Options agent (Alpaca, $10,000, two months)
 
 A second, separate agent that **buys and sells option contracts** on large US
 companies: a **call** when research says the stock will rise, a **put** when it
-says it will fall. It trades a **Tradier sandbox (paper) account**, runs in the
+says it will fall. It trades its **own Alpaca paper account**, runs in the
 cloud on GitHub Actions, and keeps its own records apart from the S&P 500 agent.
 
 ## How it decides
@@ -49,31 +49,33 @@ Every 30 minutes during market hours it checks each contract it holds and sells 
 | `OPT_RUN_DAYS` | 61 | length of the run; no new trades in the last 10 days |
 
 It only **buys** options, so the most any trade can lose is what was paid for it.
-Paper only: the code refuses any Tradier address except the sandbox.
+Paper only: the code refuses any Alpaca address except the paper one.
 **No strategy can guarantee a profit.** Options can lose value fast, and two
 months is a short test.
 
 ## Setup (one time, about 15 minutes)
 
-1. **Tradier sandbox.** Sign up at <https://developer.tradier.com> (free), then
-   open *API Access* in your Tradier dashboard. Copy the **Sandbox Access
-   Token** and the **sandbox Account Number** (starts with `VA`).
-   Sandbox prices are 15 minutes delayed, which is fine for once-a-day decisions.
-   The sandbox starts with its own simulated balance. The agent trades with at
-   most $10,000 of it either way, and reports its gain or loss as a percent of $10,000.
+1. **A second Alpaca paper account.** Log in at <https://app.alpaca.markets>
+   (the same login as your S&P 500 agent). Open the account menu at the top left
+   and choose **Open New Paper Account**. Set its starting balance to
+   **$10,000**. It must be a separate account, so the two agents never trade
+   each other's positions. In that new paper account, open the **API Keys**
+   panel on the home page and click **Generate New Keys**. Copy the **Key** and
+   the **Secret**. The secret is shown only once.
+   Options trading is switched on for Alpaca paper accounts by default.
 2. **Gemini API key.** Go to <https://aistudio.google.com/apikey>, sign in with
    your Google account, and click *Create API key*. A Gemini Pro chat
    subscription can't be connected to a program; this key is how the agent
    uses Gemini.
 3. **Add the secrets to GitHub.** In the repository go to *Settings → Secrets and
    variables → Actions → New repository secret*, and add:
-   - `TRADIER_ACCESS_TOKEN`
-   - `TRADIER_ACCOUNT_ID`
+   - `OPT_ALPACA_API_KEY_ID` (the new account's Key)
+   - `OPT_ALPACA_API_SECRET_KEY` (its Secret)
    - `GEMINI_API_KEY`
 
    (`FINNHUB_API_KEY` is already there for the S&P 500 agent.)
 4. **Test it.** Go to *Actions → options-agent → Run workflow* (leave "none").
-   The *Check connections* step shows OK or FAIL for Tradier, Finnhub and Gemini.
+   The *Check connections* step shows OK or FAIL for Alpaca, Finnhub and Gemini.
    After that it runs by itself every weekday.
 
 Never paste keys into chat, code or issues; only into GitHub secrets.

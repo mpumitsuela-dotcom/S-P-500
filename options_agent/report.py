@@ -24,7 +24,7 @@ def build(
 ) -> tuple[str, str]:
     start_eq = float(run.get("start_equity") or equity)
     since = equity - start_eq
-    # Measured on the money the agent trades with, so a sandbox that starts
+    # Measured on the money the agent trades with, so a paper account that starts
     # with more than the budget doesn't make the return look smaller.
     base = min(start_eq, budget) if budget else start_eq
     since_pct = since / base if base else 0.0

@@ -23,7 +23,7 @@ Write to the owner in short, plain sentences, with no jargon. Money in dollars, 
 
 ## The separate options agent
 
-`options_agent/` is a second agent: it buys calls and puts on a **Tradier sandbox** account ($10,000, two months), with research from Finnhub and Gemini (Google Search grounding). It has its own workflow (`options-agent.yml`), state branch (`options-agent-state`, files in `.state/options/`), daily `options-report` issues, and the same owner rules as the table above. Its kill switch (`.state/options/KILL_SWITCH`) blocks only new trades: exits keep running. See `OPTIONS_AGENT.md`. Everything below is about the S&P 500 agent.
+`options_agent/` is a second agent: it buys calls and puts on its **own Alpaca paper account** (secrets `OPT_ALPACA_*`, $10,000, two months), with research from Finnhub and Gemini (Google Search grounding). It has its own workflow (`options-agent.yml`), state branch (`options-agent-state`, files in `.state/options/`), daily `options-report` issues, and the same owner rules as the table above. Its kill switch (`.state/options/KILL_SWITCH`) blocks only new trades: exits keep running. See `OPTIONS_AGENT.md`. Everything below is about the S&P 500 agent.
 
 ## How it runs
 

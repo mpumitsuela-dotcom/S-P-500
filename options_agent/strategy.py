@@ -85,7 +85,7 @@ def entry_decision(row: dict, verdict: dict, regime: dict, s: OptionsSettings, t
 # --- contract choice -----------------------------------------------------
 
 def bs_delta(spot: float, strike: float, years: float, vol: float, kind: str, rate: float = 0.04) -> float:
-    """Black-Scholes delta, used only when Tradier's chain has no greeks."""
+    """Black-Scholes delta, used only when Alpaca's feed has no greeks."""
     if years <= 0 or vol <= 0 or spot <= 0 or strike <= 0:
         return 0.0
     d1 = (math.log(spot / strike) + (rate + vol * vol / 2) * years) / (vol * math.sqrt(years))

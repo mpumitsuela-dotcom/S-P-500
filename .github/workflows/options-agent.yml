@@ -1,14 +1,14 @@
-# Runs the options (contracts) agent on a Tradier sandbox (paper) account,
+# Runs the options (contracts) agent on its own Alpaca paper account,
 # every 30 minutes on weekdays. options_agent/run.py decides from New York time
 # what is due: managing held contracts (9:45-15:50), the once-a-day research
 # and buying session (11:00-13:00), and the daily report (16:10-17:30).
 #
 # Required repo secrets:
-#   TRADIER_ACCESS_TOKEN  Tradier sandbox access token
-#   TRADIER_ACCOUNT_ID    Tradier sandbox account number
+#   OPT_ALPACA_API_KEY_ID      paper key of a SEPARATE Alpaca paper account
+#   OPT_ALPACA_API_SECRET_KEY  (not the S&P 500 agent's account)
 #   GEMINI_API_KEY        free key from https://aistudio.google.com/apikey
 #   FINNHUB_API_KEY       (already set for the S&P 500 agent) news, analysts, earnings dates
-# Without the Tradier secrets every run exits in seconds and does nothing.
+# Without the OPT_ALPACA secrets every run exits in seconds and does nothing.
 #
 # State (trades, research log, run clock, kill switch, reports) lives on the
 # `options-agent-state` branch, separate from the S&P 500 agent's.
@@ -34,9 +34,11 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  TRADIER_ACCESS_TOKEN: ${{ secrets.TRADIER_ACCESS_TOKEN }}
-  TRADIER_ACCOUNT_ID: ${{ secrets.TRADIER_ACCOUNT_ID }}
-  TRADIER_BASE_URL: https://sandbox.tradier.com/v1
+  # Deliberately no fallback to ALPACA_API_KEY_ID: sharing the S&P 500 agent's
+  # account would mix the two agents' positions.
+  OPT_ALPACA_API_KEY_ID: ${{ secrets.OPT_ALPACA_API_KEY_ID }}
+  OPT_ALPACA_API_SECRET_KEY: ${{ secrets.OPT_ALPACA_API_SECRET_KEY }}
+  OPT_ALPACA_BASE_URL: https://paper-api.alpaca.markets
   GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
   FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY || secrets.FINNHUB }}
   # Leave most of Finnhub's free 60/minute to the S&P 500 agent.

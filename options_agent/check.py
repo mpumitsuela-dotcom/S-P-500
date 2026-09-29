@@ -22,14 +22,14 @@ def main() -> int:
             print(f"FAIL  {name}: {exc}")
 
     if not broker.configured():
-        print("FAIL  Tradier: TRADIER_ACCESS_TOKEN and TRADIER_ACCOUNT_ID secrets are not set")
+        print("FAIL  Alpaca: OPT_ALPACA_API_KEY_ID and OPT_ALPACA_API_SECRET_KEY secrets are not set")
         return 1
-    check("Tradier paper account", lambda: (broker.ensure_paper(), "sandbox")[1])
-    check("Tradier market clock", lambda: broker.get_clock()["description"])
-    check("Tradier balances", lambda: f"equity ${broker.get_account()['equity']:,.2f}")
-    check("Tradier option positions", lambda: f"{len(broker.get_option_positions())} held")
-    check("Tradier price history", lambda: f"{len(broker.daily_closes('SPY', date.today() - timedelta(days=10), date.today()))} SPY days")
-    check("Tradier option chain", lambda: f"{len(broker.option_chain('AAPL', 'call', date.today() + timedelta(days=30), date.today() + timedelta(days=60), 0, 1e6, 1))} AAPL calls")
+    check("Alpaca paper endpoint", lambda: (broker.ensure_paper(), broker.base_url())[1])
+    check("Alpaca market clock", lambda: broker.get_clock()["description"])
+    check("Alpaca account", lambda: "equity ${equity:,.2f}, options level {options_level}".format(**broker.get_account()))
+    check("Alpaca option positions", lambda: f"{len(broker.get_option_positions())} held")
+    check("Alpaca price history", lambda: f"{len(broker.daily_closes('SPY', date.today() - timedelta(days=10), date.today()))} SPY days")
+    check("Alpaca option chain", lambda: f"{len(broker.option_chain('AAPL', 'call', date.today() + timedelta(days=30), date.today() + timedelta(days=60), 0, 1e6))} AAPL calls")
 
     def finnhub():
         from data import finnhub_data

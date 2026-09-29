@@ -77,7 +77,7 @@ def alert(key: str, title: str, body: str, day: date, owner_decision: bool = Fal
 # --- positions -----------------------------------------------------------
 
 def held_positions(today: date) -> list[dict]:
-    """Tradier option positions joined with the agent's own notes and live quotes."""
+    """Alpaca option positions joined with the agent's own notes and live quotes."""
     raw = alp.get_option_positions()
     notes = journal.load("positions.json", {})
     snaps = alp.get_quotes([p["symbol"] for p in raw]) if raw else {}
@@ -353,7 +353,7 @@ def due_sessions(now_ny: datetime, market_open: bool, run: dict, force: str) -> 
 def main() -> int:
     setup_logging()
     if not alp.configured():
-        logger.warning("TRADIER_ACCESS_TOKEN / TRADIER_ACCOUNT_ID are not set: nothing to do")
+        logger.warning("OPT_ALPACA_API_KEY_ID / OPT_ALPACA_API_SECRET_KEY are not set: nothing to do")
         return 0
     alp.ensure_paper()
     # Never the S&P 500 agent's `agent-state` branch: its own history and lock.
