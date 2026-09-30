@@ -307,6 +307,7 @@ def test_research_buys_when_data_and_gemini_agree_then_manage_takes_profit(tmp_p
            "earnings_date": None, "days_to_earnings": None}
     monkeypatch.setattr(run.signals, "score_universe", lambda syms, today: (pd.DataFrame([row]), {"trend": "up"}))
     monkeypatch.setattr(run.signals, "company_names", lambda: {"AAPL": "Apple"})
+    monkeypatch.setattr(run.signals, "company_financials", lambda sym: {"pe_ratio": 30.0})
     monkeypatch.setenv("GEMINI_API_KEY", "k")
     monkeypatch.setattr(run.gemini_research, "research", lambda *a: {**_verdict("bullish", 72), "thesis": "Demand strong.", "sources": [], "model": "m"})
     monkeypatch.setattr(run.alp, "option_chain", lambda *a, **k: [_c("AAPL261120C00230000", 230, 4.0, 4.2, 0.55)])
@@ -370,7 +371,7 @@ def test_gemini_falls_back_to_discovered_model(monkeypatch):
     monkeypatch.setattr(gemini_research, "discover_models", lambda: ["gemini-9-flash"])
     answer = {"candidates": [{"content": {"parts": [{"text": '{"direction": "bullish", "conviction": 70, "thesis": "x"}'}]}}]}
 
-    def call(model, prompt):
+    def call(model, prompt, grounded=True):
         if model == "retired-model":
             raise LookupError("404")
         return answer
@@ -379,3 +380,32 @@ def test_gemini_falls_back_to_discovered_model(monkeypatch):
     v = gemini_research.research("AAPL", "Apple", TODAY, {})
     assert v["model"] == "gemini-9-flash" and v["direction"] == "bullish"
     assert gemini_research._working_model == ["gemini-9-flash"]
+
+
+def test_prompt_without_web_search_says_so_and_skips_the_tool(monkeypatch):
+    p = gemini_research.build_prompt("AAPL", "Apple", TODAY, {"company_financials": {"pe_ratio": 30}}, grounded=False)
+    assert "cannot browse" in p and "Google Search" not in p and "pe_ratio" in p
+    assert "using Google Search" in gemini_research.build_prompt("AAPL", "Apple", TODAY, {}, grounded=True)
+
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.delenv("GEMINI_GOOGLE_SEARCH", raising=False)
+    monkeypatch.setattr(gemini_research, "_working_model", [])
+    bodies = []
+
+    class R:
+        status_code, content, text = 200, b"x", ""
+
+        @staticmethod
+        def json():
+            return {"candidates": [{"content": {"parts": [{"text": '{"direction": "neutral", "conviction": 10}'}]}}]}
+
+    monkeypatch.setattr(gemini_research.requests, "post", lambda url, **kw: bodies.append(kw["json"]) or R())
+    v = gemini_research.research("AAPL", "Apple", TODAY, {})
+    assert "tools" not in bodies[0] and v["web_search"] is False
+    monkeypatch.setenv("GEMINI_GOOGLE_SEARCH", "on")
+    gemini_research.research("AAPL", "Apple", TODAY, {})
+    assert bodies[1]["tools"] == [{"google_search": {}}]
+
+
+def test_headline_text_has_source_and_date():
+    assert signals._headline_text({"headline": "Apple beats", "source": "Reuters", "datetime": 1790640000}) == "Apple beats (Reuters, 2026-09-29)"

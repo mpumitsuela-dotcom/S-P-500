@@ -165,6 +165,7 @@ def _facts(row: dict, regime: dict) -> dict:
         "recent_headlines": row.get("headlines") or [], "analyst_ratings": row.get("analysts") or {},
         "next_earnings_date_per_calendar": row.get("earnings_date"), "overall_market": regime,
         "agent_data_score_-1_to_+1": row["score"],
+        "company_financials": signals.company_financials(row["symbol"]),
     }
 
 

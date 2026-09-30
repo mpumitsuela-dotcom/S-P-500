@@ -1,5 +1,13 @@
 """
-Deep company research with Google Gemini, grounded in live Google Search.
+Company research with Google Gemini.
+
+Two modes (GEMINI_GOOGLE_SEARCH):
+  off (default)  Gemini analyses the research the agent collects itself: recent
+                 Finnhub headlines, analyst ratings, company financials, price
+                 data and the earnings date. Free on Gemini's free tier.
+  on             Gemini also searches the web live (Google Search grounding).
+                 Needs billing turned on for the key's Google project; the free
+                 tier refuses these requests with a 429 "quota" error.
 
 Needs a Gemini API key (free from https://aistudio.google.com/apikey) in the
 GEMINI_API_KEY secret. A Gemini Pro chat subscription can't be called by a
@@ -36,6 +44,10 @@ _SKIP_WORDS = ("image", "tts", "audio", "live", "embedding", "vision", "robotics
 VERDICT_FIELDS = ("direction", "conviction", "thesis")
 
 
+def search_enabled() -> bool:
+    return os.environ.get("GEMINI_GOOGLE_SEARCH", "off").strip().lower() in ("on", "1", "true", "yes")
+
+
 class GeminiUnavailable(RuntimeError):
     pass
 
@@ -48,16 +60,24 @@ def api_key() -> str:
     return os.environ.get("GEMINI_API_KEY", "")
 
 
-def build_prompt(symbol: str, company: str, today: date, facts: dict) -> str:
+def build_prompt(symbol: str, company: str, today: date, facts: dict, grounded: bool = True) -> str:
     facts_text = json.dumps(facts, indent=1, default=str)
-    return f"""You are a buy-side equity research analyst. Today is {today:%A %d %B %Y}.
-Research {company} ({symbol}) using Google Search for the most recent information:
+    if grounded:
+        how = f"""Research {company} ({symbol}) using Google Search for the most recent information:
 latest news and press releases, the last earnings report and guidance, analyst upgrades/downgrades
 and price-target changes, the next earnings date, product/legal/regulatory events, the sector and
-the overall market backdrop.
+the overall market backdrop."""
+    else:
+        how = f"""Analyse {company} ({symbol}). You cannot browse the web: base your view on the research below
+(this week's headlines, analyst ratings, company financials, price data, the earnings date and the
+overall market), plus what you know about the company's business, competitors and sector. Your own
+knowledge may be out of date, so where it conflicts with the research below, trust the research.
+If the headlines are few or unclear, lower your conviction."""
+    return f"""You are a buy-side equity research analyst. Today is {today:%A %d %B %Y}.
+{how}
 
 A trading agent is deciding whether to BUY a CALL option (expects the stock to rise) or BUY a PUT
-option (expects it to fall) that expires in 30-60 days. Its own market data says:
+option (expects it to fall) that expires in 30-60 days. Its own research says:
 {facts_text}
 
 Weigh the evidence honestly. If the evidence is mixed or thin, say "neutral" - a missed trade costs
@@ -149,7 +169,8 @@ def _sources(payload: dict) -> list[dict]:
 def research(symbol: str, company: str, today: date, facts: dict) -> dict:
     """Returns the verdict dict plus "model" and "sources". Raises
     GeminiUnavailable when no key is set or every model fails."""
-    return ask(build_prompt(symbol, company, today, facts), symbol)
+    grounded = search_enabled()
+    return ask(build_prompt(symbol, company, today, facts, grounded), symbol, grounded)
 
 
 def rank_models(names: list[str]) -> list[str]:
@@ -180,11 +201,12 @@ def discover_models() -> list[str]:
 _working_model: list[str] = []  # remembered for the rest of the run once one answers
 
 
-def ask(prompt: str, label: str) -> dict:
+def ask(prompt: str, label: str, grounded: bool | None = None) -> dict:
     """Send a research prompt whose reply is the verdict JSON above."""
     if not api_key():
         raise GeminiUnavailable("GEMINI_API_KEY is not set")
     symbol = label
+    grounded = search_enabled() if grounded is None else grounded
     last_error: Exception | None = None
     tried: set[str] = set()
 
@@ -197,11 +219,11 @@ def ask(prompt: str, label: str) -> dict:
             continue
         tried.add(model)
         try:
-            payload = _call(model, prompt)
+            payload = _call(model, prompt, grounded)
             parts = ((payload.get("candidates") or [{}])[0].get("content") or {}).get("parts") or []
             text = "".join(p.get("text", "") for p in parts)
             verdict = parse_verdict(text)
-            verdict.update(model=model, sources=_sources(payload))
+            verdict.update(model=model, sources=_sources(payload), web_search=grounded)
             logger.info("Gemini (%s) on %s: %s, conviction %d", model, symbol, verdict["direction"], verdict["conviction"])
             _working_model[:] = [model]
             return verdict

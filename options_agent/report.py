@@ -80,7 +80,7 @@ def build(
         lines += [
             f"### {v['symbol']}: {v.get('decision', '')}",
             f"- **Data score:** {v.get('score', 0):+.2f} ({v.get('score_explained', '')})",
-            f"- **Gemini ({g.get('model', '?')}):** {g.get('direction', '?')}, conviction {g.get('conviction', '?')}/100. {g.get('thesis', '')}",
+            f"- **Gemini ({g.get('model', '?')}{'' if g.get('web_search', True) else ', no web search'}):** {g.get('direction', '?')}, conviction {g.get('conviction', '?')}/100. {g.get('thesis', '')}",
         ]
         if g.get("risks"):
             lines.append(f"- **Risks:** {'; '.join(g['risks'][:3])}")
