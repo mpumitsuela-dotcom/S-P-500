@@ -90,6 +90,10 @@ class OptionsSettings:
     max_spread_pct: float = field(default_factory=lambda: _f("OPT_MAX_SPREAD_PCT", "0.12"))
     min_open_interest: int = field(default_factory=lambda: _i("OPT_MIN_OPEN_INTEREST", "100"))
 
+    # The free quote feed can lag the real market, so a buy that doesn't fill is
+    # retried once as a marketable limit this far above the shown ask. It fills
+    # at the real price, never above this cap.
+    retry_buffer_pct: float = field(default_factory=lambda: _f("OPT_RETRY_BUFFER", "0.05"))
     order_wait_seconds: int = field(default_factory=lambda: _i("OPT_ORDER_WAIT_SECONDS", "60"))
 
 
