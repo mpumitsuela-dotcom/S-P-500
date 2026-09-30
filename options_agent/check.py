@@ -52,7 +52,8 @@ def main() -> int:
             gemini_research._call(model, "Reply with the word OK.", grounded=False)
             return f"{model} answers without Google Search"
 
-        check("Gemini without Google Search (diagnostic)", plain)
+        if gemini_research.search_enabled():  # only meaningful when web search is on
+            check("Gemini without Google Search (diagnostic)", plain)
     else:
         ok = False
         print("FAIL  Gemini: GEMINI_API_KEY not set (free key: https://aistudio.google.com/apikey)")
