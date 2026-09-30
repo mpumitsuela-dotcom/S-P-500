@@ -55,5 +55,7 @@
   "spy_return_20d_pct": 0.79,
   "spy_annual_vol_pct": 10.9
  },
- "last_manage": "2026-09-30"
+ "last_manage": "2026-09-30",
+ "last_report_equity": 10000.0,
+ "last_report": "2026-09-30"
 }
