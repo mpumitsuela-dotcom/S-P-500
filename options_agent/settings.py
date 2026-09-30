@@ -51,7 +51,11 @@ class OptionsSettings:
     drawdown_halt_pct: float = field(default_factory=lambda: _f("OPT_DRAWDOWN_HALT", "0.25"))
 
     # Exits
+    # Owner's choice (30 Sep, D): at +60% sell half and let the rest run with the
+    # trailing stop; the rest is also sold if its gain falls back to +20%.
     take_profit_pct: float = field(default_factory=lambda: _f("OPT_TAKE_PROFIT", "0.60"))
+    take_profit_fraction: float = field(default_factory=lambda: _f("OPT_TAKE_PROFIT_FRACTION", "0.5"))
+    runner_floor_pct: float = field(default_factory=lambda: _f("OPT_RUNNER_FLOOR", "0.20"))
     stop_loss_pct: float = field(default_factory=lambda: _f("OPT_STOP_LOSS", "0.45"))
     trail_arm_pct: float = field(default_factory=lambda: _f("OPT_TRAIL_ARM", "0.30"))
     trail_giveback_pct: float = field(default_factory=lambda: _f("OPT_TRAIL_GIVEBACK", "0.25"))
@@ -67,6 +71,13 @@ class OptionsSettings:
     # average, or a put while above) needs this much conviction instead.
     min_conviction_against_market: int = field(default_factory=lambda: _i("OPT_MIN_CONVICTION_AGAINST_MARKET", "75"))
     max_candidates_for_ai: int = field(default_factory=lambda: _i("OPT_MAX_AI_CANDIDATES", "6"))
+    # Owner's choices (30 Sep): A) skip options priced for much bigger moves than
+    # the stock really makes; B) Gemini's expected move must cover break-even;
+    # C) at most this many positions in one sector.
+    max_iv_ratio: float = field(default_factory=lambda: _f("OPT_MAX_IV_RATIO", "1.5"))
+    max_iv_premium: float = field(default_factory=lambda: _f("OPT_MAX_IV_PREMIUM", "0.10"))
+    require_move_covers_breakeven: bool = field(default_factory=lambda: os.environ.get("OPT_REQUIRE_BREAKEVEN", "1") != "0")
+    max_per_sector: int = field(default_factory=lambda: _i("OPT_MAX_PER_SECTOR", "2"))
     earnings_blackout_days: int = field(default_factory=lambda: _i("OPT_EARNINGS_BLACKOUT_DAYS", "7"))
     require_gemini: bool = field(default_factory=lambda: os.environ.get("OPT_REQUIRE_GEMINI", "1") != "0")
 

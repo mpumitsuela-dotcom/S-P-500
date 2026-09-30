@@ -149,27 +149,30 @@ def manage(today: date, final_day: bool) -> None:
             entry_price=p["entry_price"], current_price=p["current_price"], dte=p["dte"],
             peak_gain=n["peak_gain"], days_to_earnings=signals.days_to_earnings(earnings, today),
             current_score=scores.get(p["underlying"]), research_against=n.get("research_against"),
+            half_taken=bool(n.get("half_taken")),
         )
-        reason, urgent = strategy.exit_decision(hp, S, final_day)
+        reason, urgent, sell_qty = strategy.exit_decision(hp, S, final_day)
         if not reason:
             continue
-        logger.info("Selling %s: %s", p["symbol"], reason)
+        logger.info("Selling %d of %d %s: %s", sell_qty, p["qty"], p["symbol"], reason)
         if p["quote_ok"]:
             price = strategy.exit_limit_price(p["bid"], p["ask"], urgent)
-            order = alp.submit_and_wait(p["symbol"], p["qty"], "sell", price, S.order_wait_seconds)
+            order = alp.submit_and_wait(p["symbol"], sell_qty, "sell", price, S.order_wait_seconds)
         else:
             order = {"filled_qty": 0, "status": "no quote"}
         # A stop-loss, earnings or end-of-run sale must not wait 30 minutes for
         # the next try: sell whatever is left at the market.
-        left = p["qty"] - order["filled_qty"]
+        left = sell_qty - order["filled_qty"]
         if left > 0 and (urgent or not p["quote_ok"]):
             logger.info("Limit sale of %s didn't fill: selling %d at the market", p["symbol"], left)
             mkt = alp.submit_and_wait(p["symbol"], left, "sell", None, S.order_wait_seconds)
             filled = order["filled_qty"] + mkt["filled_qty"]
             avg = ((order["filled_qty"] * order.get("fill_price", 0) + mkt["filled_qty"] * mkt["fill_price"]) / filled) if filled else 0.0
             order = {**mkt, "filled_qty": filled, "fill_price": avg}
-        rec = record_trade(today, "sell", p["symbol"], label_of(p), p["qty"], order, reason[0].upper() + reason[1:] + ".",
+        rec = record_trade(today, "sell", p["symbol"], label_of(p), sell_qty, order, reason[0].upper() + reason[1:] + ".",
                            {"entry_price": p["entry_price"]})
+        if rec["filled_qty"] and sell_qty < p["qty"]:
+            n["half_taken"] = True  # the rest now runs with the trailing stop
         if rec["filled_qty"]:
             pnl = (rec["fill_price"] - p["entry_price"]) * rec["filled_qty"] * 100
             logger.info("Sold %s: %s $%.2f", p["symbol"], "gain" if pnl >= 0 else "loss", abs(pnl))
@@ -266,11 +269,20 @@ def research(today: date, run: dict, equity: float, account: dict, new_entries_a
 
     bought = 0
     buying_power = float(account.get("option_buying_power") or 0)
+    sector_of = signals.sector_map()
+    in_sector: dict[str, int] = {}
+    for u in held_under:
+        in_sector[sector_of.get(u, u)] = in_sector.get(sector_of.get(u, u), 0) + 1
     for row in candidates:
         if bought >= min(open_slots, S.max_new_per_day):
             break
         sym = row["symbol"]
         direction = strategy.direction_of(row["score"])
+        sector = sector_of.get(sym, sym)  # unknown sector: counts on its own
+        if in_sector.get(sector, 0) >= S.max_per_sector:
+            journal.append("research.jsonl", {"date": today.isoformat(), "type": "pass", "symbol": sym, "score": row["score"],
+                                              "reason": f"already {in_sector[sector]} positions in {sector} (limit {S.max_per_sector})"})
+            continue
         try:
             v = gemini_research.research(sym, names.get(sym, sym), today, _facts(row, regime))
         except gemini_research.GeminiUnavailable as exc:
@@ -288,7 +300,12 @@ def research(today: date, run: dict, equity: float, account: dict, new_entries_a
         contracts = alp.option_chain(sym, kind, today + timedelta(days=S.min_dte), today + timedelta(days=S.max_dte),
                                      spot * 0.8, spot * 1.2)
         cap = min(budget * S.max_premium_per_trade_pct, budget * S.max_total_premium_pct - premium_at_risk(positions))
-        choice, none_why = strategy.choose_contract(contracts, spot, kind, today, cap, row["annual_vol_pct"] / 100, S)
+        move = v.get("expected_move_pct")
+        if S.require_move_covers_breakeven and move is None:
+            journal.append("research.jsonl", {**rec, "decision": "passed: Gemini gave no expected move to check the break-even against"})
+            continue
+        choice, none_why = strategy.choose_contract(contracts, spot, kind, today, cap, row["annual_vol_pct"] / 100, S,
+                                                    move if S.require_move_covers_breakeven else None)
         if not choice:
             journal.append("research.jsonl", {**rec, "decision": f"passed: agreed {direction}, but {none_why}"})
             continue
@@ -300,7 +317,10 @@ def research(today: date, run: dict, equity: float, account: dict, new_entries_a
 
         label = f"{sym} ${choice.strike:g} {kind} exp {choice.expiration}"
         reason = (f"{'Bet on a rise' if kind == 'call' else 'Bet on a fall'}: {why}. Gemini: {v['thesis'][:300]} "
-                  f"Contract: delta {choice.delta:.2f}, {choice.dte} days, bid/ask {choice.bid:.2f}/{choice.ask:.2f}.")
+                  f"Contract: delta {choice.delta:.2f}, {choice.dte} days, bid/ask {choice.bid:.2f}/{choice.ask:.2f}, "
+                  f"needs a {choice.breakeven_move_pct:.1f}% move to break even"
+                  + (f" vs {move:+.1f}% expected" if move is not None else "")
+                  + (f", implied volatility {choice.iv:.0%} vs {row['annual_vol_pct']:.0f}% actual." if choice.iv else "."))
         price = strategy.entry_limit_price(choice.bid, choice.ask)
         order = alp.submit_and_wait(choice.symbol, qty, "buy", price, S.order_wait_seconds)
         trade = record_trade(today, "buy", choice.symbol, label, qty, order, reason,
@@ -309,6 +329,7 @@ def research(today: date, run: dict, equity: float, account: dict, new_entries_a
                                           else f"tried to buy {label}, order did not fill"})
         if trade["filled_qty"]:
             bought += 1
+            in_sector[sector] = in_sector.get(sector, 0) + 1
             notes = journal.load("positions.json", {})
             notes[choice.symbol] = {
                 "why": f"{why}. {v['thesis'][:200]}", "opened": today.isoformat(), "peak_gain": 0.0,

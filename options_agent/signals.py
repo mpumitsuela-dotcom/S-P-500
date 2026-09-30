@@ -181,6 +181,17 @@ def fetch_research(symbol: str) -> dict:
     }
 
 
+def sector_map() -> dict[str, str]:
+    """Symbol -> GICS sector (S&P 500 list), or {} if it can't be loaded."""
+    try:
+        from data.universe import get_sector_map
+
+        return get_sector_map()
+    except Exception as exc:  # noqa: BLE001 - the sector limit is skipped, not the trading day
+        logger.warning("Sector list unavailable, sector limit not applied: %s", exc)
+        return {}
+
+
 def company_names() -> dict[str, str]:
     try:
         from data import finnhub_data

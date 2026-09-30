@@ -29,12 +29,20 @@ Every trading day around 11:00 New York time:
    overall market). No earnings report within 7 days.
 4. **Contract choice.** 30–60 days to expiry, delta near 0.55, tight bid/ask
    spread, at least 100 open interest.
+5. **Worth the price** (your choices, 30 Sep):
+   - **Not overpriced.** It skips options whose price implies moves well above
+     what the stock actually does (implied volatility over 1.5× the stock's
+     recent volatility and more than 10 points above it).
+   - **The expected move pays for it.** Gemini's expected 30-day move must be
+     at least the move needed to break even on the option by expiry.
+   - **Spread out.** At most 2 positions in the same sector.
 
 Every 30 minutes during market hours it checks each contract it holds and sells when:
 
 | Rule | Default |
 |---|---|
-| Take profit | up 60% |
+| Take profit | up 60%: sells **half** (with 2+ contracts); the rest keeps running |
+| Letting the rest run | the other half (or a single contract) is sold by the trailing stop, or if its gain falls back to +20% |
 | Stop loss | down 45% |
 | Trailing stop | after being up 30%+, gives back 25 points |
 | Close to expiry | 14 days left |
