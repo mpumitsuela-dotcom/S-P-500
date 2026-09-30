@@ -354,3 +354,28 @@ def test_research_makes_no_trade_without_gemini_key(tmp_path, monkeypatch):
     monkeypatch.setattr(run.alp, "submit_and_wait", lambda *a: pytest.fail("must not trade"))
     run.research(TODAY, {}, 10_000.0, {"option_buying_power": 10_000}, True, "")
     assert "gemini_missing" in alerts
+
+
+def test_rank_models_prefers_newest_flash():
+    names = ["gemini-2.5-flash", "gemini-3.8-flash", "gemini-3.1-pro-preview", "gemini-3.8-flash-lite",
+             "gemini-3.8-flash-image", "text-embedding-004", "gemini-3.8-flash-tts"]
+    assert gemini_research.rank_models(names) == [
+        "gemini-3.8-flash", "gemini-2.5-flash", "gemini-3.1-pro-preview", "gemini-3.8-flash-lite"]
+
+
+def test_gemini_falls_back_to_discovered_model(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(gemini_research, "MODELS", ["retired-model"])
+    monkeypatch.setattr(gemini_research, "_working_model", [])
+    monkeypatch.setattr(gemini_research, "discover_models", lambda: ["gemini-9-flash"])
+    answer = {"candidates": [{"content": {"parts": [{"text": '{"direction": "bullish", "conviction": 70, "thesis": "x"}'}]}}]}
+
+    def call(model, prompt):
+        if model == "retired-model":
+            raise LookupError("404")
+        return answer
+
+    monkeypatch.setattr(gemini_research, "_call", call)
+    v = gemini_research.research("AAPL", "Apple", TODAY, {})
+    assert v["model"] == "gemini-9-flash" and v["direction"] == "bullish"
+    assert gemini_research._working_model == ["gemini-9-flash"]

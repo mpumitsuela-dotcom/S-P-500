@@ -25,8 +25,13 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 logger = logging.getLogger("options_agent.gemini")
 
 API_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-# Tried in order; a model that no longer exists (404) falls through to the next.
-MODELS = [m.strip() for m in os.environ.get("GEMINI_MODELS", "gemini-2.5-pro,gemini-2.5-flash,gemini-flash-latest").split(",") if m.strip()]
+LIST_URL = "https://generativelanguage.googleapis.com/v1beta/models"
+# Tried in order; a model that no longer exists (404) or has no quota (429)
+# falls through to the next. Google retires model names often (the 2.5 models
+# were closed to new users by Sept 2026), so after these the agent asks the API
+# which models it offers now (discover_models).
+MODELS = [m.strip() for m in os.environ.get("GEMINI_MODELS", "gemini-3.8-flash,gemini-flash-latest,gemini-3.1-pro-preview").split(",") if m.strip()]
+_SKIP_WORDS = ("image", "tts", "audio", "live", "embedding", "vision", "robotics", "computer-use", "native", "thinking-exp")
 
 VERDICT_FIELDS = ("direction", "conviction", "thesis")
 
@@ -148,13 +153,50 @@ def research(symbol: str, company: str, today: date, facts: dict) -> dict:
     return ask(build_prompt(symbol, company, today, facts), symbol)
 
 
+def rank_models(names: list[str]) -> list[str]:
+    """Text models worth trying, best first: flash (fast, generous free quota),
+    then pro, newest version first; flash-lite last."""
+    def version(n: str) -> float:
+        m = re.search(r"gemini-(\d+(?:\.\d+)?)", n)
+        return float(m.group(1)) if m else 0.0
+
+    usable = [n for n in names if n.startswith("gemini-") and not any(w in n for w in _SKIP_WORDS)]
+    tier = lambda n: 0 if "flash" in n and "lite" not in n else 1 if "pro" in n else 2  # noqa: E731
+    return sorted(usable, key=lambda n: (tier(n), -version(n), "preview" in n or "exp" in n, n))
+
+
+def discover_models() -> list[str]:
+    """Models this key can call for generateContent, ranked; [] if the list can't be read."""
+    try:
+        resp = requests.get(LIST_URL, headers={"x-goog-api-key": api_key()}, params={"pageSize": 200}, timeout=30)
+        resp.raise_for_status()
+        names = [m["name"].removeprefix("models/") for m in resp.json().get("models") or []
+                 if "generateContent" in (m.get("supportedGenerationMethods") or [])]
+        return rank_models(names)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not list Gemini models: %s", exc)
+        return []
+
+
+_working_model: list[str] = []  # remembered for the rest of the run once one answers
+
+
 def ask(prompt: str, label: str) -> dict:
     """Send a research prompt whose reply is the verdict JSON above."""
     if not api_key():
         raise GeminiUnavailable("GEMINI_API_KEY is not set")
     symbol = label
     last_error: Exception | None = None
-    for model in MODELS:
+    tried: set[str] = set()
+
+    def candidates():
+        yield from _working_model + MODELS
+        yield from discover_models()[:6]
+
+    for model in candidates():
+        if model in tried:
+            continue
+        tried.add(model)
         try:
             payload = _call(model, prompt)
             parts = ((payload.get("candidates") or [{}])[0].get("content") or {}).get("parts") or []
@@ -162,6 +204,7 @@ def ask(prompt: str, label: str) -> dict:
             verdict = parse_verdict(text)
             verdict.update(model=model, sources=_sources(payload))
             logger.info("Gemini (%s) on %s: %s, conviction %d", model, symbol, verdict["direction"], verdict["conviction"])
+            _working_model[:] = [model]
             return verdict
         except (LookupError, ValueError, json.JSONDecodeError, _Transient) as exc:
             logger.warning("Gemini %s failed for %s: %s", model, symbol, exc)

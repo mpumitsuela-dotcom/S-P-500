@@ -43,6 +43,7 @@ def main() -> int:
         return f"{v['model']} answered ({v['direction']}, {len(v['sources'])} sources)"
 
     if gemini_research.api_key():
+        check("Gemini models offered to this key", lambda: ", ".join(gemini_research.discover_models()[:8]) or "none listed")
         check("Gemini research", gemini)
     else:
         ok = False
