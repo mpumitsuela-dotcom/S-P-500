@@ -7,9 +7,6 @@ options-agent-state git branch (scheduler/shared_state.py):
   trades.jsonl      one line per filled (or failed) order, with the reason
   research.jsonl    every Gemini verdict and every candidate the agent passed on
   KILL_SWITCH       present = trading paused (set by a crash)
-
-The futures agent keeps the same files in .state/futures/ through its own
-Journal (futures_agent/run.py).
 """
 from __future__ import annotations
 
