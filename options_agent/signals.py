@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 import math
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import pandas as pd
 
@@ -138,6 +138,34 @@ def fetch_earnings_dates(symbols: list[str], today: date) -> dict[str, str]:
     return out
 
 
+def _headline_text(h: dict) -> str:
+    """'Headline (Source, 2026-09-29)' so Gemini can tell how recent and from where."""
+    when = datetime.utcfromtimestamp(h["datetime"]).strftime("%Y-%m-%d") if h.get("datetime") else ""
+    extra = ", ".join(x for x in (h.get("source", ""), when) if x)
+    return f"{h.get('headline', '')} ({extra})" if extra else h.get("headline", "")
+
+
+# Company fundamentals passed to Gemini (Finnhub /stock/metric, cached a week).
+FINANCIAL_FIELDS = {
+    "marketCapitalization": "market_cap_millions", "peTTM": "pe_ratio", "psTTM": "price_to_sales",
+    "revenueGrowthTTMYoy": "revenue_growth_pct_yoy", "epsGrowthTTMYoy": "eps_growth_pct_yoy",
+    "grossMarginTTM": "gross_margin_pct", "netProfitMarginTTM": "net_margin_pct", "roeTTM": "return_on_equity_pct",
+    "totalDebt/totalEquityQuarterly": "debt_to_equity", "beta": "beta",
+    "52WeekHigh": "high_52_weeks", "52WeekLow": "low_52_weeks",
+}
+
+
+def company_financials(symbol: str) -> dict:
+    from data import finnhub_data
+
+    try:
+        m = finnhub_data.get_basic_financials(symbol)
+    except Exception as exc:  # noqa: BLE001 - financials are extra context, not required
+        logger.warning("Finnhub financials failed for %s: %s", symbol, exc)
+        return {}
+    return {name: round(float(m[k]), 2) for k, name in FINANCIAL_FIELDS.items() if isinstance(m.get(k), (int, float))}
+
+
 def fetch_research(symbol: str) -> dict:
     """Finnhub news sentiment + analyst consensus for one company."""
     from data import finnhub_data
@@ -147,7 +175,7 @@ def fetch_research(symbol: str) -> dict:
     return {
         "news_score": news.get("sentiment_score"),
         "headline_count": news.get("headline_count", 0),
-        "headlines": [h.get("headline", "") for h in news.get("top_headlines", [])][:5],
+        "headlines": [_headline_text(h) for h in news.get("top_headlines", [])][:5],
         "analyst_score": finnhub_data._analyst_score(rec),
         "analysts": {k: rec.get(k) for k in ("strongBuy", "buy", "hold", "sell", "strongSell")} if rec else {},
     }

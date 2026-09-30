@@ -40,6 +40,10 @@ env:
   OPT_ALPACA_API_SECRET_KEY: ${{ secrets.OPT_ALPACA_API_SECRET_KEY }}
   OPT_ALPACA_BASE_URL: https://paper-api.alpaca.markets
   GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+  # Owner's choice (30 Sep): Gemini analyses the agent's own research without
+  # searching the web, which Gemini's free tier doesn't allow. "on" needs
+  # billing enabled on the key's Google project.
+  GEMINI_GOOGLE_SEARCH: "off"
   FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY || secrets.FINNHUB }}
   # Leave most of Finnhub's free 60/minute to the S&P 500 agent.
   FINNHUB_CALLS_PER_MINUTE: "20"

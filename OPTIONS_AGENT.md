@@ -14,10 +14,16 @@ Every trading day around 11:00 New York time:
    (Finnhub) into one number from -1 (points down) to +1 (points up). It also
    checks the overall market (S&P 500 trend) and each company's next
    earnings date.
-2. **Deep research.** The strongest few go to **Google Gemini with live Google
-   Search**, which researches the latest news, results, guidance, analyst moves
-   and upcoming events, then gives a verdict: bullish, bearish or neutral,
-   a conviction from 0 to 100, and its reasons and sources.
+2. **Deep research.** The strongest few go to **Google Gemini**. It gets the
+   company's latest headlines (with source and date), analyst ratings, key
+   financials (growth, margins, valuation, debt), price data, the earnings date
+   and the overall market. It weighs these with what it knows about the
+   business and its competitors, then gives a verdict: bullish, bearish or
+   neutral, a conviction from 0 to 100, its reasons and its risks.
+   Gemini doesn't search the web itself (your choice, 30 Sep): the free Gemini
+   tier doesn't allow it. To turn web search on later, enable billing on the
+   key's project in Google AI Studio and set `GEMINI_GOOGLE_SEARCH: "on"` in
+   the workflow.
 3. **A trade needs both to agree.** Both the data score and Gemini must point
    the same way, with conviction of at least 65 (75 when betting against the
    overall market). No earnings report within 7 days.
@@ -85,7 +91,7 @@ Never paste keys into chat, code or issues; only into GitHub secrets.
 - A **daily report** issue (label `options-report`), which GitHub emails you:
   account value, gain or loss since the start compared with the S&P 500,
   contracts held, every trade with its reason, and the research behind each
-  decision, with Gemini's sources.
+  decision.
 - A **needs-attention** issue straight away if something breaks (⚠️, which Claude
   fixes) or needs your decision (🟠, such as the loss limit being hit or the run
   finishing).
