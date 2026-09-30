@@ -149,16 +149,46 @@ def _held(**kw):
         ({"current_price": 1.0}, False, "stop loss"),
         ({"days_to_earnings": 1}, False, "earnings"),
         ({"dte": 10}, False, "expiry"),
-        ({"current_price": 3.3}, False, "take profit"),
+        ({"current_price": 3.3, "qty": 2}, False, "take profit on 1 of 2"),
+        ({"current_price": 3.3, "peak_gain": 0.65}, False, None),  # a single contract keeps running
+        ({"current_price": 3.3, "qty": 2, "half_taken": True, "peak_gain": 0.65}, False, None),
         ({"current_price": 2.2, "peak_gain": 0.5}, False, "trailing"),
+        ({"current_price": 2.3, "half_taken": True, "peak_gain": 0.3}, False, "locking in"),
         ({"current_score": -0.4}, False, "research flipped"),
         ({"kind": "put", "current_score": -0.4}, False, None),
         ({"research_against": "Gemini now bearish"}, False, "research flipped"),
     ],
 )
 def test_exit_rules(kw, final, expect):
-    reason, _ = strategy.exit_decision(_held(**kw), S, final)
+    reason, _, qty = strategy.exit_decision(_held(**kw), S, final)
     assert (reason is None) if expect is None else (expect in reason)
+    if reason and "take profit" not in reason:
+        assert qty == _held(**kw).qty  # every other exit sells everything
+
+
+def test_take_profit_sells_half_rounded_down():
+    assert strategy.exit_decision(_held(qty=5, current_price=3.3), S, False)[2] == 2
+
+
+def test_overpriced_options_and_breakeven():
+    assert strategy.options_overpriced(0.60, 0.30, S)       # priced for twice the real moves
+    assert not strategy.options_overpriced(0.36, 0.30, S)   # normal
+    assert strategy.options_overpriced(0.24, 0.10, S)       # 2.4x and 14 points above
+    assert not strategy.options_overpriced(0.16, 0.10, S)   # 1.6x but only 6 points: cheap in dollars
+    assert not strategy.options_overpriced(None, 0.30, S)
+    assert strategy.breakeven_move_pct(100, 100, 4, "call") == pytest.approx(4.0)
+    assert strategy.breakeven_move_pct(100, 105, 7, "put") == pytest.approx(2.0)
+
+
+def test_choose_contract_applies_iv_and_breakeven_filters():
+    c = _c("C2", 100, 4.0, 4.2, 0.55)
+    assert strategy.choose_contract([{**c, "iv": 0.30}], 100, "call", TODAY, 800, 0.28, S, 6.0)[0] is not None
+    pick, why = strategy.choose_contract([{**c, "iv": 0.70}], 100, "call", TODAY, 800, 0.28, S, 6.0)
+    assert pick is None and "overpriced" in why
+    pick, why = strategy.choose_contract([c], 100, "call", TODAY, 800, 0.28, S, 3.0)  # needs 4.2%
+    assert pick is None and "break-even" in why
+    pick, _ = strategy.choose_contract([{**c, "symbol": "P"}], 100, "put", TODAY, 800, 0.28, S, -6.0)
+    assert pick is not None and pick.breakeven_move_pct == pytest.approx(4.2)
 
 
 def test_due_sessions():
@@ -309,9 +339,11 @@ def test_research_buys_when_data_and_gemini_agree_then_manage_takes_profit(tmp_p
     monkeypatch.setattr(run.signals, "company_names", lambda: {"AAPL": "Apple"})
     monkeypatch.setattr(run.signals, "company_financials", lambda sym: {"pe_ratio": 30.0})
     monkeypatch.setenv("GEMINI_API_KEY", "k")
-    monkeypatch.setattr(run.gemini_research, "research", lambda *a: {**_verdict("bullish", 72), "thesis": "Demand strong.", "sources": [], "model": "m"})
-    monkeypatch.setattr(run.alp, "option_chain", lambda *a, **k: [_c("AAPL261120C00230000", 230, 4.0, 4.2, 0.55)])
-    quotes = {"AAPL261120C00230000": {"bid": 4.0, "ask": 4.2}}
+    monkeypatch.setattr(run.signals, "sector_map", lambda: {"AAPL": "Information Technology"})
+    monkeypatch.setattr(run.gemini_research, "research", lambda *a: {**_verdict("bullish", 72), "expected_move_pct": 8.0,
+                                                                     "thesis": "Demand strong.", "sources": [], "model": "m"})
+    monkeypatch.setattr(run.alp, "option_chain", lambda *a, **k: [_c("AAPL261120C00230000", 230, 3.9, 4.0, 0.55)])
+    quotes = {"AAPL261120C00230000": {"bid": 3.9, "ask": 4.0}}
     monkeypatch.setattr(run.alp, "get_quotes", lambda syms: quotes)
     monkeypatch.setattr(run.alp, "get_option_positions", lambda: held)
 
@@ -320,7 +352,9 @@ def test_research_buys_when_data_and_gemini_agree_then_manage_takes_profit(tmp_p
         if side == "buy":
             held.append({"symbol": symbol, "qty": qty, "avg_entry_price": price})
         else:
-            held.clear()
+            held[0]["qty"] -= qty
+            if not held[0]["qty"]:
+                held.clear()
         return {"id": len(orders), "status": "filled", "filled_qty": qty, "fill_price": price}
 
     monkeypatch.setattr(run.alp, "submit_and_wait", fill)
@@ -328,17 +362,22 @@ def test_research_buys_when_data_and_gemini_agree_then_manage_takes_profit(tmp_p
     info = journal.run_info(TODAY, 10_000.0, 61)
 
     run.research(TODAY, info, 10_000.0, account, True, "")
-    assert orders == [("buy", "AAPL261120C00230000", 1, 4.15)]  # $800 limit / $415 a contract
+    assert orders == [("buy", "AAPL261120C00230000", 2, 4.0)]  # $800 limit / $400 a contract
     notes = journal.load("positions.json", {})
     assert "Demand strong" in notes["AAPL261120C00230000"]["why"]
     assert any("BOUGHT" in r.get("decision", "") for r in journal.read_lines("research.jsonl"))
 
     run.manage(TODAY, final_day=False)  # nothing to do at the entry price
     assert len(orders) == 1
-    quotes["AAPL261120C00230000"] = {"bid": 6.9, "ask": 7.1}  # +69%
+    quotes["AAPL261120C00230000"] = {"bid": 6.7, "ask": 6.9}  # +70%: sell half
     run.manage(TODAY, final_day=False)
-    assert orders[-1][0] == "sell" and orders[-1][2] == 1
-    assert "Take profit" in journal.read_lines("trades.jsonl")[-1]["reason"]
+    assert orders[-1][0] == "sell" and orders[-1][2] == 1 and held[0]["qty"] == 1
+    assert "Take profit on 1 of 2" in journal.read_lines("trades.jsonl")[-1]["reason"]
+    run.manage(TODAY, final_day=False)  # the other half keeps running
+    assert len(orders) == 2
+    quotes["AAPL261120C00230000"] = {"bid": 4.5, "ask": 4.7}  # back to +15%: lock in the rest
+    run.manage(TODAY, final_day=False)
+    assert orders[-1][2] == 1 and held == []
 
 
 def test_research_makes_no_trade_without_gemini_key(tmp_path, monkeypatch):
@@ -486,3 +525,27 @@ def test_research_asks_for_retry_when_gemini_is_down(tmp_path, monkeypatch):
 
     monkeypatch.setattr(run.gemini_research, "research", down)
     assert run.research(TODAY, {}, 10_000.0, {"option_buying_power": 10_000}, True, "") == "retry"
+
+
+def test_sector_limit_skips_before_asking_gemini(tmp_path, monkeypatch):
+    from options_agent import run
+    from options_agent.settings import OptionsSettings
+
+    monkeypatch.setattr(journal, "DIR", tmp_path)
+    monkeypatch.setattr(run, "S", OptionsSettings(max_per_sector=1))
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    base = {"score": 0.6, "score_parts": {"trend": 0.8}, "rsi14": 60, "days_to_earnings": None, "price": 100.0,
+            "vs_sma50_pct": 4, "return_5d_pct": 1, "return_20d_pct": 5, "annual_vol_pct": 28}
+    rows = [{**base, "symbol": "MSFT"}, {**base, "symbol": "JPM", "score": 0.5}]
+    monkeypatch.setattr(run.signals, "score_universe", lambda syms, today: (pd.DataFrame(rows), {"trend": "up"}))
+    monkeypatch.setattr(run.signals, "company_names", lambda: {})
+    monkeypatch.setattr(run.signals, "company_financials", lambda sym: {})
+    monkeypatch.setattr(run.signals, "sector_map", lambda: {"AAPL": "Tech", "MSFT": "Tech", "JPM": "Financials"})
+    held = [{"symbol": "AAPL261120C00230000", "qty": 1, "avg_entry_price": 4.0, "current_price": 4.0}]
+    monkeypatch.setattr(run.alp, "get_option_positions", lambda: held)
+    monkeypatch.setattr(run.alp, "get_quotes", lambda syms: {})
+    asked = []
+    monkeypatch.setattr(run.gemini_research, "research", lambda sym, *a: asked.append(sym) or _verdict("neutral", 10))
+    run.research(TODAY, {}, 10_000.0, {"option_buying_power": 10_000}, True, "")
+    assert "MSFT" not in asked and "JPM" in asked
+    assert any(r["symbol"] == "MSFT" and "Tech" in r.get("reason", "") for r in journal.read_lines("research.jsonl"))

@@ -6,16 +6,19 @@ Entry, per company, all of these must hold:
      and the stock isn't already stretched that way (RSI < 75 for a call,
      > 25 for a put).
   2. No earnings report within earnings_blackout_days.
-  3. Gemini's deep research, done independently with live Google Search,
+  3. Gemini's research (options_agent/gemini_research.py)
      reaches the SAME direction with conviction >= min_conviction (higher
      when betting against the overall market's trend).
   4. A liquid contract exists 30-60 days out, near delta 0.55, with a tight
-     bid/ask spread, that fits the per-trade and total money limits.
+     bid/ask spread, that fits the per-trade and total money limits, isn't
+     overpriced against the stock's real moves, and whose break-even move
+     Gemini's expected move covers. At most max_per_sector positions per sector.
 
 Exit, per position, the first that applies:
   final day of the run -> stop loss -> earnings tomorrow -> close to
-  expiry -> take profit -> trailing stop after a good gain -> Gemini's
-  re-review or the data score turned against the position.
+  expiry -> take profit on half (the rest runs) -> trailing stop after a
+  good gain -> the running half falls back to +20% -> Gemini's re-review or
+  the data score turned against the position.
 """
 from __future__ import annotations
 
@@ -105,21 +108,42 @@ class ContractChoice:
     delta: float
     open_interest: int
     dte: int
+    iv: float | None = None
+    breakeven_move_pct: float = 0.0  # how far the stock must move by expiry just to get the premium back
 
     @property
     def spread_pct(self) -> float:
         return (self.ask - self.bid) / self.mid if self.mid else 1.0
 
 
+def options_overpriced(iv: float | None, realized_vol: float, s: OptionsSettings) -> bool:
+    """A) The option's implied volatility (the move it's priced for) is well
+    above how much the stock has actually been moving."""
+    if not iv or realized_vol <= 0:
+        return False  # can't tell: don't block on missing data
+    return iv > realized_vol * s.max_iv_ratio and iv - realized_vol > s.max_iv_premium
+
+
+def breakeven_move_pct(spot: float, strike: float, ask: float, kind: str) -> float:
+    """B) % the stock must move (up for a call, down for a put) by expiry to break even."""
+    if kind == "call":
+        return (strike + ask) / spot * 100 - 100
+    return 100 - (strike - ask) / spot * 100
+
+
 def choose_contract(
     contracts: list[dict], spot: float, kind: str, today: date,
     max_premium_dollars: float, annual_vol: float, s: OptionsSettings,
+    expected_move_pct: float | None = None,
 ) -> tuple[ContractChoice | None, str]:
-    """Best contract: liquid, 30-60 days, delta nearest target, affordable.
-    contracts: {symbol, strike, expiration, bid, ask, open_interest, delta, iv}
-    (options_agent/broker.py option_chain). Returns (choice, reason when none)."""
+    """Best contract: liquid, 30-60 days, delta nearest target, affordable,
+    not overpriced, and (when an expected move is given) one the expected move
+    pays for. contracts: {symbol, strike, expiration, bid, ask, open_interest,
+    delta, iv} (options_agent/broker.py option_chain). Returns (choice, reason when none)."""
     usable: list[ContractChoice] = []
-    reasons = {"no quote": 0, "spread too wide": 0, "open interest too low": 0, "delta out of range": 0, "too expensive": 0}
+    reasons = {"no quote": 0, "spread too wide": 0, "open interest too low": 0, "delta out of range": 0,
+               "too expensive": 0, "options overpriced vs real moves": 0, "expected move doesn't cover break-even": 0}
+    move = None if expected_move_pct is None else (expected_move_pct if kind == "call" else -expected_move_pct)
     for c in contracts:
         bid, ask = float(c.get("bid") or 0), float(c.get("ask") or 0)
         if bid <= 0 or ask <= 0 or ask < bid:
@@ -145,7 +169,16 @@ def choose_contract(
         if ask * 100 > max_premium_dollars:
             reasons["too expensive"] += 1
             continue
-        usable.append(ContractChoice(c["symbol"], c["expiration"], strike, kind, bid, ask, round(mid, 2), round(adelta, 3), oi, dte))
+        iv = float(c["iv"]) if c.get("iv") else None
+        if options_overpriced(iv, annual_vol, s):
+            reasons["options overpriced vs real moves"] += 1
+            continue
+        be = breakeven_move_pct(spot, strike, ask, kind)
+        if move is not None and move < be:
+            reasons["expected move doesn't cover break-even"] += 1
+            continue
+        usable.append(ContractChoice(c["symbol"], c["expiration"], strike, kind, bid, ask, round(mid, 2), round(adelta, 3), oi, dte,
+                                     iv, round(be, 2)))
     if not usable:
         worst = ", ".join(f"{k}: {v}" for k, v in reasons.items() if v) or "no contracts listed"
         return None, f"no suitable contract ({worst})"
@@ -199,31 +232,35 @@ class HeldPosition:
     days_to_earnings: int | None = None
     current_score: float | None = None  # today's data score for the company
     research_against: str | None = None  # set when Gemini's re-review turned against it
+    half_taken: bool = False  # D) part already sold at the take-profit; the rest is running
 
     @property
     def gain(self) -> float:
         return self.current_price / self.entry_price - 1 if self.entry_price else 0.0
 
 
-def exit_decision(p: HeldPosition, s: OptionsSettings, final_day: bool) -> tuple[str | None, bool]:
-    """(reason to sell, urgent). urgent sells hit the bid to be sure of a fill."""
-    g = p.gain
+def exit_decision(p: HeldPosition, s: OptionsSettings, final_day: bool) -> tuple[str | None, bool, int]:
+    """(reason to sell, urgent, how many contracts). urgent sells make sure of a fill."""
+    g, all_ = p.gain, p.qty
     if final_day:
-        return "the two-month run ends today", True
+        return "the two-month run ends today", True, all_
     if g <= -s.stop_loss_pct:
-        return f"stop loss: down {g:.0%}", True
+        return f"stop loss: down {g:.0%}", True, all_
     if p.days_to_earnings is not None and p.days_to_earnings <= 1:
-        return "earnings report tomorrow: not holding through it", True
+        return "earnings report tomorrow: not holding through it", True, all_
     if p.dte <= s.min_dte_hold:
-        return f"{p.dte} days to expiry: time decay speeds up from here", False
-    if g >= s.take_profit_pct:
-        return f"take profit: up {g:.0%}", False
+        return f"{p.dte} days to expiry: time decay speeds up from here", False, all_
+    if g >= s.take_profit_pct and not p.half_taken and p.qty >= 2:
+        part = max(1, int(p.qty * s.take_profit_fraction))
+        return f"take profit on {part} of {p.qty}: up {g:.0%}; the rest keeps running with a trailing stop", False, part
     if p.peak_gain >= s.trail_arm_pct and g <= p.peak_gain - s.trail_giveback_pct:
-        return f"trailing stop: gave back from +{p.peak_gain:.0%} to {g:+.0%}", False
+        return f"trailing stop: gave back from +{p.peak_gain:.0%} to {g:+.0%}", False, all_
+    if p.half_taken and g <= s.runner_floor_pct:
+        return f"locking in the rest: gain fell back to {g:+.0%}", False, all_
     if p.research_against:
-        return f"research flipped: {p.research_against}", False
+        return f"research flipped: {p.research_against}", False, all_
     if p.current_score is not None:
         against = -p.current_score if p.kind == "call" else p.current_score
         if against >= s.thesis_flip_score:
-            return f"research flipped: data score now {p.current_score:+.2f} against the position", False
-    return None, False
+            return f"research flipped: data score now {p.current_score:+.2f} against the position", False, all_
+    return None, False, 0
