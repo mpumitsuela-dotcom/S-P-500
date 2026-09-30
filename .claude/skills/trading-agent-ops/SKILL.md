@@ -25,6 +25,10 @@ Write to the owner in short, plain sentences, with no jargon. Money in dollars, 
 
 `options_agent/` is a second agent: it buys calls and puts on its **own Alpaca paper account** (secrets `OPT_ALPACA_*`, $10,000, two months), with research from Finnhub and Gemini (Google Search grounding). It has its own workflow (`options-agent.yml`), state branch (`options-agent-state`, files in `.state/options/`), daily `options-report` issues, and the same owner rules as the table above. Its kill switch (`.state/options/KILL_SWITCH`) blocks only new trades: exits keep running. See `OPTIONS_AGENT.md`. Everything below is about the S&P 500 agent.
 
+## Memory between sessions
+
+Read `references/lessons-learned.md` first: it holds what earlier sessions learned, the open questions, and the rules for adding to it. After each evening check, append anything new. Strategy settings stay locked; lessons only propose changes for the trial end.
+
 ## How it runs
 
 - `.github/workflows/trading-agent.yml` fires every 15 min on weekdays in market hours and runs `scheduler/run_shared.py` as the **primary** runner. GitHub's cron is unreliable, so Claude routines ("Trading agent: kick …") also start the workflow at 9:45, 15:10 and 16:25 ET. The owner's PC may run the same script as the **backup** (`scripts/run_pc.bat`, 25 min head start for the cloud).
