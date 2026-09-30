@@ -323,13 +323,17 @@ def research(today: date, run: dict, equity: float, account: dict, new_entries_a
                   + (f", implied volatility {choice.iv:.0%} vs {row['annual_vol_pct']:.0f}% actual." if choice.iv else "."))
         price = strategy.entry_limit_price(choice.bid, choice.ask)
         order = alp.submit_and_wait(choice.symbol, qty, "buy", price, S.order_wait_seconds)
-        # Not filled just under the ask (the free quote feed can lag the real
-        # market): try once at the ask - the price the budget and break-even
-        # checks were already done with.
+        # Not filled (the free quote feed can lag the real market): try once
+        # more with a limit a little above the shown ask. It fills at the real
+        # price, never above the limit - and only if the budget and the
+        # break-even check still pass at that limit.
         left = qty - order["filled_qty"]
-        if left > 0 and choice.ask > price:
-            logger.info("Buy of %s not filled at %.2f: trying %d at the ask %.2f", choice.symbol, price, left, choice.ask)
-            again = alp.submit_and_wait(choice.symbol, left, "buy", choice.ask, S.order_wait_seconds)
+        retry = alp.tick_round(max(choice.ask * (1 + S.retry_buffer_pct), choice.ask + 0.05), up=True)
+        be = strategy.breakeven_move_pct(spot, choice.strike, retry, kind)
+        move_ok = move is None or not S.require_move_covers_breakeven or (move if kind == "call" else -move) >= be
+        if left > 0 and retry * 100 * left <= cap and move_ok:
+            logger.info("Buy of %s not filled at %.2f: trying %d with a limit of %.2f", choice.symbol, price, left, retry)
+            again = alp.submit_and_wait(choice.symbol, left, "buy", retry, S.order_wait_seconds)
             filled = order["filled_qty"] + again["filled_qty"]
             avg = ((order["filled_qty"] * order["fill_price"] + again["filled_qty"] * again["fill_price"]) / filled) if filled else 0.0
             order = {**again, "filled_qty": filled, "fill_price": avg}

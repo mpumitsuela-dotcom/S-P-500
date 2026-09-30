@@ -551,7 +551,7 @@ def test_sector_limit_skips_before_asking_gemini(tmp_path, monkeypatch):
     assert any(r["symbol"] == "MSFT" and "Tech" in r.get("reason", "") for r in journal.read_lines("research.jsonl"))
 
 
-def test_unfilled_buy_retries_once_at_the_ask(tmp_path, monkeypatch):
+def test_unfilled_buy_retries_once_above_the_shown_ask(tmp_path, monkeypatch):
     from options_agent import run
 
     monkeypatch.setattr(journal, "DIR", tmp_path)
@@ -565,17 +565,41 @@ def test_unfilled_buy_retries_once_at_the_ask(tmp_path, monkeypatch):
     monkeypatch.setattr(run.signals, "sector_map", lambda: {})
     monkeypatch.setattr(run.gemini_research, "research", lambda *a: {**_verdict("bullish", 80), "expected_move_pct": 6.5,
                                                                      "thesis": "Buyback.", "sources": [], "model": "m"})
-    monkeypatch.setattr(run.alp, "option_chain", lambda *a, **k: [_c("NVDA261106C00235000", 235, 7.17, 7.65, 0.46)])
+    monkeypatch.setattr(run.alp, "option_chain", lambda *a, **k: [_c("NVDA261106C00235000", 235, 6.95, 7.40, 0.46)])
     monkeypatch.setattr(run.alp, "get_option_positions", lambda: [])
     orders = []
 
     def fill(symbol, qty, side, price, wait):
         orders.append(price)
-        n = qty if price >= 7.65 else 0
-        return {"id": len(orders), "status": "filled" if n else "canceled", "filled_qty": n, "fill_price": price if n else 0.0}
+        n = qty if price >= 7.60 else 0  # the real market is above the shown ask
+        return {"id": len(orders), "status": "filled" if n else "canceled", "filled_qty": n, "fill_price": 7.60 if n else 0.0}
 
     monkeypatch.setattr(run.alp, "submit_and_wait", fill)
     run.research(TODAY, {}, 10_000.0, {"option_buying_power": 10_000}, True, "")
-    assert orders == [7.5, 7.65]  # just under the ask, then at the ask
+    assert orders == [7.25, 7.8]  # just under the ask, then a limit 5% above it
     t = journal.read_lines("trades.jsonl")[-1]
-    assert t["filled_qty"] == 1 and t["fill_price"] == 7.65
+    assert t["filled_qty"] == 1 and t["fill_price"] == 7.60  # filled at the real price, below the limit
+
+
+def test_buy_retry_skipped_when_it_breaks_the_budget_or_breakeven(tmp_path, monkeypatch):
+    from options_agent import run
+
+    monkeypatch.setattr(journal, "DIR", tmp_path)
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    row = {"symbol": "NVDA", "score": 0.72, "score_parts": {"trend": 0.8}, "rsi14": 60, "price": 231.0, "vs_sma50_pct": 4,
+           "return_5d_pct": 1, "return_20d_pct": 5, "annual_vol_pct": 27, "headlines": [], "analysts": {},
+           "earnings_date": None, "days_to_earnings": None}
+    monkeypatch.setattr(run.signals, "score_universe", lambda syms, today: (pd.DataFrame([row]), {"trend": "up"}))
+    monkeypatch.setattr(run.signals, "company_names", lambda: {})
+    monkeypatch.setattr(run.signals, "company_financials", lambda sym: {})
+    monkeypatch.setattr(run.signals, "sector_map", lambda: {})
+    # Expected +5.2%: covers break-even at the ask (5.04%) but not at the higher retry limit.
+    monkeypatch.setattr(run.gemini_research, "research", lambda *a: {**_verdict("bullish", 80), "expected_move_pct": 5.2,
+                                                                     "thesis": "x", "sources": [], "model": "m"})
+    monkeypatch.setattr(run.alp, "option_chain", lambda *a, **k: [_c("NVDA261106C00235000", 235, 7.17, 7.65, 0.46)])
+    monkeypatch.setattr(run.alp, "get_option_positions", lambda: [])
+    orders = []
+    monkeypatch.setattr(run.alp, "submit_and_wait", lambda sym, qty, side, price, wait: orders.append(price) or
+                        {"id": 1, "status": "canceled", "filled_qty": 0, "fill_price": 0.0})
+    run.research(TODAY, {}, 10_000.0, {"option_buying_power": 10_000}, True, "")
+    assert orders == [7.5]
