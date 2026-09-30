@@ -45,6 +45,14 @@ def main() -> int:
     if gemini_research.api_key():
         check("Gemini models offered to this key", lambda: ", ".join(gemini_research.discover_models()[:8]) or "none listed")
         check("Gemini research", gemini)
+
+        def plain():
+            # Tells a quota problem with Google Search grounding apart from one with the key itself.
+            model = (gemini_research.discover_models() or gemini_research.MODELS)[0]
+            gemini_research._call(model, "Reply with the word OK.", grounded=False)
+            return f"{model} answers without Google Search"
+
+        check("Gemini without Google Search (diagnostic)", plain)
     else:
         ok = False
         print("FAIL  Gemini: GEMINI_API_KEY not set (free key: https://aistudio.google.com/apikey)")

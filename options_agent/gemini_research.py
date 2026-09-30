@@ -114,15 +114,14 @@ def parse_verdict(text: str) -> dict:
     retry=retry_if_exception_type((_Transient, requests.ConnectionError, requests.Timeout)),
     reraise=True,
 )
-def _call(model: str, prompt: str) -> dict:
+def _call(model: str, prompt: str, grounded: bool = True) -> dict:
+    body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}], "generationConfig": {"temperature": 0.2}}
+    if grounded:
+        body["tools"] = [{"google_search": {}}]
     resp = requests.post(
         API_URL.format(model=model),
         headers={"x-goog-api-key": api_key(), "Content-Type": "application/json"},
-        json={
-            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-            "tools": [{"google_search": {}}],
-            "generationConfig": {"temperature": 0.2},
-        },
+        json=body,
         timeout=180,
     )
     if resp.status_code in (500, 502, 503, 504):
