@@ -140,14 +140,15 @@ def get_clock() -> dict:
 
 
 def get_option_positions() -> list[dict]:
-    """[{symbol, qty, avg_entry_price}] (price per share, i.e. per 1/100th of a contract)."""
+    """[{symbol, qty, avg_entry_price, current_price}] (prices per share, i.e. per 1/100th of a contract)."""
     out = []
     for p in _trading("GET", "/v2/positions") or []:
         if p.get("asset_class") != "us_option":
             continue
         qty = float(p.get("qty") or 0)
         if qty:
-            out.append({"symbol": p["symbol"], "qty": qty, "avg_entry_price": float(p.get("avg_entry_price") or 0)})
+            out.append({"symbol": p["symbol"], "qty": qty, "avg_entry_price": float(p.get("avg_entry_price") or 0),
+                        "current_price": float(p.get("current_price") or 0)})
     return out
 
 
@@ -240,20 +241,24 @@ def _normalise_order(o: dict) -> dict:
     }
 
 
-def submit(symbol: str, qty: int, side: str, limit_price: float) -> dict:
+def submit(symbol: str, qty: int, side: str, limit_price: float | None) -> dict:
+    """A limit order, or a market order when limit_price is None (used only to
+    make sure an urgent sale goes through)."""
     body = {
         "symbol": symbol,
         "qty": str(int(qty)),
         "side": side,
-        "type": "limit",
-        "limit_price": f"{limit_price:.2f}",
+        "type": "limit" if limit_price is not None else "market",
         "time_in_force": "day",
         "position_intent": "buy_to_open" if side == "buy" else "sell_to_close",
     }
+    if limit_price is not None:
+        body["limit_price"] = f"{limit_price:.2f}"
     order = _trading("POST", "/v2/orders", json=body)
     if not order.get("id"):
         raise RuntimeError(f"Alpaca did not accept the order for {symbol}: {order}")
-    logger.info("Submitted %s %d %s @ %.2f -> order %s", body["position_intent"], qty, symbol, limit_price, order["id"])
+    logger.info("Submitted %s %d %s @ %s -> order %s", body["position_intent"], qty, symbol,
+                f"{limit_price:.2f}" if limit_price is not None else "market", order["id"])
     return order
 
 
@@ -268,7 +273,7 @@ def cancel(order_id) -> None:
         logger.info("Cancel %s: %s", order_id, exc)
 
 
-def submit_and_wait(symbol: str, qty: int, side: str, limit_price: float, wait_seconds: int, poll: float = 3.0) -> dict:
+def submit_and_wait(symbol: str, qty: int, side: str, limit_price: float | None, wait_seconds: int, poll: float = 3.0) -> dict:
     """Place a limit order and wait for it. Anything unfilled at the end is
     cancelled, so no order is left working after the run. Returns
     {id, status, filled_qty, fill_price}."""
