@@ -85,15 +85,19 @@ def held_positions(today: date) -> list[dict]:
     for p in raw:
         occ = alp.parse_occ(p["symbol"])
         bid, ask = alp.quote_of(snaps.get(p["symbol"], {}))
-        last = float((snaps.get(p["symbol"]) or {}).get("last") or 0)
-        mark = (bid + ask) / 2 if bid > 0 and ask > 0 else (bid or last)
+        quote_ok = bid > 0 and ask >= bid
+        # No live quote: fall back to Alpaca's own valuation of the position. Never
+        # treat a missing price as zero - that would look like a 100% loss and
+        # trigger the stop-loss on a data glitch.
+        mark = (bid + ask) / 2 if quote_ok else float(p.get("current_price") or 0)
         entry = float(p.get("avg_entry_price") or 0)
         n = notes.get(p["symbol"], {})
         out.append({
             "symbol": p["symbol"], "underlying": occ.underlying, "kind": occ.kind, "strike": occ.strike,
             "expiration": occ.expiration.isoformat(), "dte": (occ.expiration - today).days,
             "qty": int(abs(float(p["qty"]))), "entry_price": entry, "current_price": round(mark, 2),
-            "bid": bid, "ask": ask, "gain": (mark / entry - 1) if entry else 0.0,
+            "bid": bid, "ask": ask, "quote_ok": quote_ok, "priced": mark > 0,
+            "gain": (mark / entry - 1) if entry and mark > 0 else 0.0,
             "why": n.get("why", "(bought before this agent kept notes)"), "notes": n,
         })
     # Forget notes on contracts no longer held (sold, or expired).
@@ -131,6 +135,13 @@ def manage(today: date, final_day: bool) -> None:
     scores = scores.get("values", {}) if scores.get("date") == today.isoformat() else {}
     for p in positions:
         n = notes.setdefault(p["symbol"], {})
+        if not p["priced"] and not final_day:
+            logger.warning("No price for %s: skipping its exit checks this run", p["symbol"])
+            alert(f"no_price_{p['symbol']}", f"no price for {label_of(p)}",
+                  f"Neither a live quote nor Alpaca's valuation was available for {label_of(p)}, so its exit rules "
+                  "(stop-loss, take-profit) couldn't be checked. They are retried every 30 minutes. This is a "
+                  "technical problem to look into if it persists.", today)
+            continue
         n["peak_gain"] = max(float(n.get("peak_gain", 0.0)), p["gain"])
         earnings = n.get("earnings_date")
         hp = strategy.HeldPosition(
@@ -142,9 +153,21 @@ def manage(today: date, final_day: bool) -> None:
         reason, urgent = strategy.exit_decision(hp, S, final_day)
         if not reason:
             continue
-        price = strategy.exit_limit_price(p["bid"], p["ask"], urgent)
         logger.info("Selling %s: %s", p["symbol"], reason)
-        order = alp.submit_and_wait(p["symbol"], p["qty"], "sell", price, S.order_wait_seconds)
+        if p["quote_ok"]:
+            price = strategy.exit_limit_price(p["bid"], p["ask"], urgent)
+            order = alp.submit_and_wait(p["symbol"], p["qty"], "sell", price, S.order_wait_seconds)
+        else:
+            order = {"filled_qty": 0, "status": "no quote"}
+        # A stop-loss, earnings or end-of-run sale must not wait 30 minutes for
+        # the next try: sell whatever is left at the market.
+        left = p["qty"] - order["filled_qty"]
+        if left > 0 and (urgent or not p["quote_ok"]):
+            logger.info("Limit sale of %s didn't fill: selling %d at the market", p["symbol"], left)
+            mkt = alp.submit_and_wait(p["symbol"], left, "sell", None, S.order_wait_seconds)
+            filled = order["filled_qty"] + mkt["filled_qty"]
+            avg = ((order["filled_qty"] * order.get("fill_price", 0) + mkt["filled_qty"] * mkt["fill_price"]) / filled) if filled else 0.0
+            order = {**mkt, "filled_qty": filled, "fill_price": avg}
         rec = record_trade(today, "sell", p["symbol"], label_of(p), p["qty"], order, reason[0].upper() + reason[1:] + ".",
                            {"entry_price": p["entry_price"]})
         if rec["filled_qty"]:
@@ -169,7 +192,9 @@ def _facts(row: dict, regime: dict) -> dict:
     }
 
 
-def research(today: date, run: dict, equity: float, account: dict, new_entries_allowed: bool, entries_block: str) -> None:
+def research(today: date, run: dict, equity: float, account: dict, new_entries_allowed: bool, entries_block: str) -> str:
+    """Returns "retry" when Gemini was unavailable, so the next firing in the
+    research window tries again instead of skipping the day."""
     positions = held_positions(today)
     held_under = {p["underlying"] for p in positions}
     universe = sorted(set(S.watchlist) | held_under)
@@ -240,6 +265,7 @@ def research(today: date, run: dict, equity: float, account: dict, new_entries_a
         return
 
     bought = 0
+    buying_power = float(account.get("option_buying_power") or 0)
     for row in candidates:
         if bought >= min(open_slots, S.max_new_per_day):
             break
@@ -248,9 +274,8 @@ def research(today: date, run: dict, equity: float, account: dict, new_entries_a
         try:
             v = gemini_research.research(sym, names.get(sym, sym), today, _facts(row, regime))
         except gemini_research.GeminiUnavailable as exc:
-            alert("gemini_failed", "Gemini research failing", f"Gemini research could not be completed: {exc}. "
-                  "No new trades are made without it. This is a technical problem to fix.", today)
-            return
+            logger.warning("Gemini unavailable (%s): will retry at the next run in the research window", exc)
+            return "retry"
         ok, why = strategy.entry_decision(row, v, regime, S, today)
         rec = {"date": today.isoformat(), "type": "verdict", "symbol": sym, "score": row["score"],
                "score_explained": _explain(row["score_parts"]), "gemini": v}
@@ -268,7 +293,6 @@ def research(today: date, run: dict, equity: float, account: dict, new_entries_a
             journal.append("research.jsonl", {**rec, "decision": f"passed: agreed {direction}, but {none_why}"})
             continue
         qty, qty_why = strategy.contracts_to_buy(choice.ask, budget, premium_at_risk(positions), S)
-        buying_power = float(account.get("option_buying_power") or 0)
         qty = min(qty, int(buying_power // (choice.ask * 100)))
         if qty < 1:
             journal.append("research.jsonl", {**rec, "decision": f"passed: {qty_why or 'not enough buying power'}"})
@@ -292,6 +316,8 @@ def research(today: date, run: dict, equity: float, account: dict, new_entries_a
             }
             journal.save("positions.json", notes)
             positions.append({"qty": trade["filled_qty"], "entry_price": trade["fill_price"]})
+            buying_power -= trade["filled_qty"] * trade["fill_price"] * 100
+    return "done"
 
 
 def spy_return_since(start: date, today: date) -> float | None:
@@ -403,7 +429,14 @@ def main() -> int:
         if "research" in due:
             journal.update_run(last_research=today.isoformat())
             parent = shared_state.push(f"options agent: research claimed {today}", parent) or parent
-            research(today, run, equity, account, not block, block)
+            if research(today, run, equity, account, not block, block) == "retry":
+                # The schedule fires every 30 minutes, so after 12:30 there's no later try today.
+                if now_ny.time() >= dtime(12, 30) or force == "research":
+                    alert("gemini_failed", "Gemini research failing",
+                          "Gemini could not be reached during today's research window, so no new trades were made "
+                          "today. Contracts already held are still managed. This is a technical problem to fix.", today)
+                else:
+                    journal.update_run(last_research=None)
         if "manage" in due:
             manage(today, final_day)
             journal.update_run(last_manage=today.isoformat())

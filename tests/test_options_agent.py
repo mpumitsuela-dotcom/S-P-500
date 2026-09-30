@@ -247,7 +247,7 @@ def test_positions_only_options(api):
         {"symbol": "AAPL261120C00230000", "asset_class": "us_option", "qty": "2", "avg_entry_price": "4.15"},
         {"symbol": "AAPL", "asset_class": "us_equity", "qty": "10", "avg_entry_price": "230"},
     ]
-    assert alp.get_option_positions() == [{"symbol": "AAPL261120C00230000", "qty": 2.0, "avg_entry_price": 4.15}]
+    assert alp.get_option_positions() == [{"symbol": "AAPL261120C00230000", "qty": 2.0, "avg_entry_price": 4.15, "current_price": 0.0}]
 
 
 def test_account(api):
@@ -409,3 +409,80 @@ def test_prompt_without_web_search_says_so_and_skips_the_tool(monkeypatch):
 
 def test_headline_text_has_source_and_date():
     assert signals._headline_text({"headline": "Apple beats", "source": "Reuters", "datetime": 1790640000}) == "Apple beats (Reuters, 2026-09-29)"
+
+
+def _manage_setup(tmp_path, monkeypatch, quote, current_price=0.0):
+    from options_agent import run
+
+    monkeypatch.setattr(journal, "DIR", tmp_path)
+    journal.save("positions.json", {"AAPL261120C00230000": {"why": "x", "peak_gain": 0.0}})
+    held = [{"symbol": "AAPL261120C00230000", "qty": 2, "avg_entry_price": 4.0, "current_price": current_price}]
+    monkeypatch.setattr(run.alp, "get_option_positions", lambda: held)
+    monkeypatch.setattr(run.alp, "get_quotes", lambda syms: {"AAPL261120C00230000": quote})
+    orders, alerts = [], []
+    monkeypatch.setattr(run, "alert", lambda key, *a, **k: alerts.append(key))
+    return run, orders, alerts
+
+
+def test_missing_price_never_triggers_a_sale(tmp_path, monkeypatch):
+    run, orders, alerts = _manage_setup(tmp_path, monkeypatch, {"bid": 0, "ask": 0})
+    monkeypatch.setattr(run.alp, "submit_and_wait", lambda *a: orders.append(a) or pytest.fail("sold on a missing price"))
+    run.manage(TODAY, final_day=False)
+    assert orders == [] and alerts == ["no_price_AAPL261120C00230000"]
+
+
+def test_falls_back_to_alpaca_valuation_without_a_quote(tmp_path, monkeypatch):
+    # No quote, but Alpaca values it at $1.80 (down 55%): the stop-loss sells at the market.
+    run, orders, _ = _manage_setup(tmp_path, monkeypatch, {"bid": 0, "ask": 0}, current_price=1.8)
+
+    def fill(symbol, qty, side, price, wait):
+        orders.append((side, qty, price))
+        return {"id": 1, "status": "filled", "filled_qty": qty, "fill_price": 1.75}
+
+    monkeypatch.setattr(run.alp, "submit_and_wait", fill)
+    run.manage(TODAY, final_day=False)
+    assert orders == [("sell", 2, None)]
+    assert "Stop loss" in journal.read_lines("trades.jsonl")[-1]["reason"]
+
+
+def test_unfilled_stop_loss_is_sent_at_market(tmp_path, monkeypatch):
+    run, orders, _ = _manage_setup(tmp_path, monkeypatch, {"bid": 1.9, "ask": 2.1})  # down 50%
+
+    def fill(symbol, qty, side, price, wait):
+        orders.append((side, qty, price))
+        if price is not None:  # the limit at the bid gets only 1 of 2
+            return {"id": 1, "status": "canceled", "filled_qty": 1, "fill_price": 1.9}
+        return {"id": 2, "status": "filled", "filled_qty": qty, "fill_price": 1.8}
+
+    monkeypatch.setattr(run.alp, "submit_and_wait", fill)
+    run.manage(TODAY, final_day=False)
+    assert orders == [("sell", 2, 1.9), ("sell", 1, None)]
+    t = journal.read_lines("trades.jsonl")[-1]
+    assert t["filled_qty"] == 2 and t["fill_price"] == pytest.approx(1.85)
+
+
+def test_market_order_body(api):
+    routes, calls = api
+    routes["/v2/orders"] = {"id": "o9", "status": "accepted"}
+    alp.submit("AAPL261120C00230000", 1, "sell", None)
+    body = calls[-1][2]["json"]
+    assert body["type"] == "market" and "limit_price" not in body and body["position_intent"] == "sell_to_close"
+
+
+def test_research_asks_for_retry_when_gemini_is_down(tmp_path, monkeypatch):
+    from options_agent import run
+
+    monkeypatch.setattr(journal, "DIR", tmp_path)
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    row = {"symbol": "AAPL", "score": 0.6, "score_parts": {"trend": 0.8}, "rsi14": 60, "days_to_earnings": None, "price": 230.0,
+           "vs_sma50_pct": 4, "return_5d_pct": 1, "return_20d_pct": 5, "annual_vol_pct": 28}
+    monkeypatch.setattr(run.signals, "score_universe", lambda syms, today: (pd.DataFrame([row]), {"trend": "up"}))
+    monkeypatch.setattr(run.signals, "company_names", lambda: {})
+    monkeypatch.setattr(run.signals, "company_financials", lambda sym: {})
+    monkeypatch.setattr(run.alp, "get_option_positions", lambda: [])
+
+    def down(*a):
+        raise gemini_research.GeminiUnavailable("503 everywhere")
+
+    monkeypatch.setattr(run.gemini_research, "research", down)
+    assert run.research(TODAY, {}, 10_000.0, {"option_buying_power": 10_000}, True, "") == "retry"
