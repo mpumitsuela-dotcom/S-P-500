@@ -85,7 +85,10 @@ class OptionsSettings:
     min_dte: int = field(default_factory=lambda: _i("OPT_MIN_DTE", "30"))
     max_dte: int = field(default_factory=lambda: _i("OPT_MAX_DTE", "60"))
     target_delta: float = field(default_factory=lambda: _f("OPT_TARGET_DELTA", "0.55"))
-    min_delta: float = field(default_factory=lambda: _f("OPT_MIN_DELTA", "0.30"))
+    # Owner's choice (1 Oct, B): keep the $800 per-trade limit and allow cheaper
+    # contracts further from the current price (delta down to 0.25) when the
+    # ones near 0.55 cost more than that. The break-even check still applies.
+    min_delta: float = field(default_factory=lambda: _f("OPT_MIN_DELTA", "0.25"))
     max_delta: float = field(default_factory=lambda: _f("OPT_MAX_DELTA", "0.75"))
     max_spread_pct: float = field(default_factory=lambda: _f("OPT_MAX_SPREAD_PCT", "0.12"))
     min_open_interest: int = field(default_factory=lambda: _i("OPT_MIN_OPEN_INTEREST", "100"))
