@@ -27,7 +27,9 @@ Every trading day around 11:00 New York time:
 3. **A trade needs both to agree.** Both the data score and Gemini must point
    the same way, with conviction of at least 65 (75 when betting against the
    overall market). No earnings report within 7 days.
-4. **Contract choice.** 30–60 days to expiry, delta near 0.55, tight bid/ask
+4. **Contract choice.** 30–60 days to expiry, delta as close to 0.55 as the
+   $800 limit allows (down to 0.25: cheaper contracts further from the current
+   price, your choice on 1 Oct), tight bid/ask
    spread, at least 100 open interest.
 5. **Worth the price** (your choices, 30 Sep):
    - **Not overpriced.** It skips options whose price implies moves well above

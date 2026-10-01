@@ -304,7 +304,10 @@ def research(today: date, run: dict, equity: float, account: dict, new_entries_a
         if S.require_move_covers_breakeven and move is None:
             journal.append("research.jsonl", {**rec, "decision": "passed: Gemini gave no expected move to check the break-even against"})
             continue
-        choice, none_why = strategy.choose_contract(contracts, spot, kind, today, cap, row["annual_vol_pct"] / 100, S,
+        # Leave room for the retry above the shown ask (see below), so a chosen
+        # contract can't be dropped at the last step for costing a few dollars too much.
+        choice, none_why = strategy.choose_contract(contracts, spot, kind, today, cap / (1 + S.retry_buffer_pct),
+                                                    row["annual_vol_pct"] / 100, S,
                                                     move if S.require_move_covers_breakeven else None)
         if not choice:
             journal.append("research.jsonl", {**rec, "decision": f"passed: agreed {direction}, but {none_why}"})

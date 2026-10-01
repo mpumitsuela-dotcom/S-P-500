@@ -103,8 +103,10 @@ def test_choose_contract_prefers_target_delta_and_respects_limits():
     contracts = [_c("C1", 95, 7.0, 7.3, 0.70), _c("C2", 100, 4.0, 4.2, 0.55), _c("C3", 110, 1.0, 1.1, 0.25), _c("C4", 100, 4.0, 4.1, 0.55, oi=5)]
     pick, _ = strategy.choose_contract(contracts, 100, "call", TODAY, 800, 0.3, S)
     assert pick.symbol == "C2"
-    # Too expensive for a $300 limit, and the cheap one is out of the delta range.
-    pick, why = strategy.choose_contract(contracts, 100, "call", TODAY, 300, 0.3, S)
+    # Over a $300 limit the near contracts are too expensive: the cheaper one further out (delta 0.25) is taken.
+    pick, _ = strategy.choose_contract(contracts, 100, "call", TODAY, 300, 0.3, S)
+    assert pick.symbol == "C3"
+    pick, why = strategy.choose_contract(contracts, 100, "call", TODAY, 100, 0.3, S)
     assert pick is None and "too expensive" in why
     # Wide spread rejected.
     pick, why = strategy.choose_contract([_c("W", 100, 3.0, 4.0, 0.5)], 100, "call", TODAY, 800, 0.3, S)
@@ -593,13 +595,39 @@ def test_buy_retry_skipped_when_it_breaks_the_budget_or_breakeven(tmp_path, monk
     monkeypatch.setattr(run.signals, "company_names", lambda: {})
     monkeypatch.setattr(run.signals, "company_financials", lambda sym: {})
     monkeypatch.setattr(run.signals, "sector_map", lambda: {})
-    # Expected +5.2%: covers break-even at the ask (5.04%) but not at the higher retry limit.
-    monkeypatch.setattr(run.gemini_research, "research", lambda *a: {**_verdict("bullish", 80), "expected_move_pct": 5.2,
+    # Expected +5.0%: covers break-even at the ask 7.40 (4.94%) but not at the retry limit 7.80 (5.11%).
+    monkeypatch.setattr(run.gemini_research, "research", lambda *a: {**_verdict("bullish", 80), "expected_move_pct": 5.0,
                                                                      "thesis": "x", "sources": [], "model": "m"})
-    monkeypatch.setattr(run.alp, "option_chain", lambda *a, **k: [_c("NVDA261106C00235000", 235, 7.17, 7.65, 0.46)])
+    monkeypatch.setattr(run.alp, "option_chain", lambda *a, **k: [_c("NVDA261106C00235000", 235, 6.95, 7.40, 0.46)])
     monkeypatch.setattr(run.alp, "get_option_positions", lambda: [])
     orders = []
     monkeypatch.setattr(run.alp, "submit_and_wait", lambda sym, qty, side, price, wait: orders.append(price) or
                         {"id": 1, "status": "canceled", "filled_qty": 0, "fill_price": 0.0})
     run.research(TODAY, {}, 10_000.0, {"option_buying_power": 10_000}, True, "")
-    assert orders == [7.5]
+    assert orders == [7.25]  # first try only: the retry limit would break the break-even check
+
+
+def test_picks_a_cheaper_contract_when_the_near_one_costs_too_much(tmp_path, monkeypatch):
+    """Yesterday's NVDA case: the $235 call ($765, $803 with the retry room) is over
+    the $800 limit, so the agent takes the cheaper $245 call further out instead."""
+    from options_agent import run
+
+    monkeypatch.setattr(journal, "DIR", tmp_path)
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    row = {"symbol": "NVDA", "score": 0.72, "score_parts": {"trend": 0.8}, "rsi14": 60, "price": 231.0, "vs_sma50_pct": 4,
+           "return_5d_pct": 1, "return_20d_pct": 5, "annual_vol_pct": 27, "headlines": [], "analysts": {},
+           "earnings_date": None, "days_to_earnings": None}
+    monkeypatch.setattr(run.signals, "score_universe", lambda syms, today: (pd.DataFrame([row]), {"trend": "up"}))
+    monkeypatch.setattr(run.signals, "company_names", lambda: {})
+    monkeypatch.setattr(run.signals, "company_financials", lambda sym: {})
+    monkeypatch.setattr(run.signals, "sector_map", lambda: {})
+    monkeypatch.setattr(run.gemini_research, "research", lambda *a: {**_verdict("bullish", 80), "expected_move_pct": 8.5,
+                                                                     "thesis": "Buyback.", "sources": [], "model": "m"})
+    chain = [_c("NVDA261106C00235000", 235, 7.17, 7.65, 0.46), _c("NVDA261106C00245000", 245, 3.80, 4.00, 0.29)]
+    monkeypatch.setattr(run.alp, "option_chain", lambda *a, **k: chain)
+    monkeypatch.setattr(run.alp, "get_option_positions", lambda: [])
+    bought = []
+    monkeypatch.setattr(run.alp, "submit_and_wait", lambda sym, qty, side, price, wait: bought.append((sym, qty)) or
+                        {"id": 1, "status": "filled", "filled_qty": qty, "fill_price": price})
+    run.research(TODAY, {}, 10_000.0, {"option_buying_power": 10_000}, True, "")
+    assert bought == [("NVDA261106C00245000", 2)]  # 2 x $400 = the $800 limit
