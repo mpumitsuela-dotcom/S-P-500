@@ -21,10 +21,6 @@ The owner also wants the agent to research properly before buying and to keep re
 
 Write to the owner in short, plain sentences, with no jargon. Money in dollars, returns in percent, times in New York time.
 
-## The separate options agent
-
-`options_agent/` is a second agent: it buys calls and puts on its **own Alpaca paper account** (secrets `OPT_ALPACA_*`, $10,000, two months), with research from Finnhub and Gemini (Google Search grounding). It has its own workflow (`options-agent.yml`), state branch (`options-agent-state`, files in `.state/options/`), daily `options-report` issues, and the same owner rules as the table above. Its kill switch (`.state/options/KILL_SWITCH`) blocks only new trades: exits keep running. See `OPTIONS_AGENT.md`. Everything below is about the S&P 500 agent.
-
 ## Memory between sessions
 
 Read `references/lessons-learned.md` first: it holds what earlier sessions learned, the open questions, and the rules for adding to it. After each evening check, append anything new. Strategy settings stay locked; lessons only propose changes for the trial end.
