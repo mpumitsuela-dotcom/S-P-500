@@ -1,0 +1,28 @@
+# Runs the test suite on every pull request and every push to main, so a change
+# to the trading code can't be merged while it breaks a test. The tests make no
+# network calls and need no API keys, and this workflow never trades.
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - run: python -m pytest -q
