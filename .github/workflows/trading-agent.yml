@@ -78,9 +78,13 @@ jobs:
       - name: Measure restored cache
         run: echo "RESTORED_CACHE_KB=$(du -sk .cache 2>/dev/null | cut -f1 || echo 0)" >> "$GITHUB_ENV"
 
-      # Manual runs ("Run workflow" button) first check every API connection.
+      # Manual runs ("Run workflow" button, and the Claude backup kicks) first
+      # check every API connection. The check only reports: one flaky probe
+      # (a Finnhub 500 on 16 Oct) must not skip the trading session, because the
+      # agent has its own retries, fallbacks and data checks.
       - name: Check API connections
         if: github.event_name == 'workflow_dispatch'
+        continue-on-error: true
         run: python scripts/check_connections.py
 
       - name: Run agent (shared with the PC backup runner)
