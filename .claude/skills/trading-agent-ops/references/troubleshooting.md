@@ -45,4 +45,4 @@ Match the symptom in the run log, `needs-attention` issue, or `agent_status.py` 
 - Run logs: GitHub MCP `get_job_logs` (job id from `list_workflow_jobs`).
 - Shared state: `python .claude/skills/trading-agent-ops/scripts/agent_status.py`.
 - Full research behind a trade: `reports/data/decisions.jsonl` on agent-state (`git fetch origin agent-state && git show FETCH_HEAD:reports/data/decisions.jsonl`).
-- API check: a manual `workflow_dispatch` run outside the session windows runs `scripts/check_connections.py` (7 checks) and then does nothing.
+- API check: every `workflow_dispatch` run (the Claude backup kicks included) first runs `scripts/check_connections.py` (8 checks). It only reports (`continue-on-error`): a failed probe no longer skips the session. Outside the session windows the run then does nothing.
