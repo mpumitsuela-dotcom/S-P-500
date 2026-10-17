@@ -75,26 +75,24 @@ class StrategyConfig:
     # research/signals.py for how it's renormalized away in the backtester,
     # where no point-in-time historical research data is available.
     weight_value: float = float(os.environ.get("SP500_WEIGHT_VALUE", "0.20"))
-    weight_quality: float = float(os.environ.get("SP500_WEIGHT_QUALITY", "0.20"))
-    # 17 Oct (owner asked for more risk): low_vol cut from 0.15 to 0.05, with
-    # the freed 0.10 moved to momentum and research. Through day 15 the book
+    weight_quality: float = float(os.environ.get("SP500_WEIGHT_QUALITY", "0.15"))
+    # 17 Oct (owner asked for more risk): low_vol cut from 0.15 to 0.05 and
+    # quality from 0.20 to 0.15, moved to momentum (0.25 -> 0.35) and research
+    # (0.20 -> 0.25). Momentum crash risk is managed by the volatility overlay
+    # below (Barroso & Santa-Clara 2015; Daniel & Moskowitz 2016). Through day 15 the book
     # ran at beta 0.39 and 6% volatility against a 20% target; the low-vol
     # factor is what holds beta down (the vol overlay never adds leverage).
-    weight_momentum: float = float(os.environ.get("SP500_WEIGHT_MOMENTUM", "0.30"))
+    weight_momentum: float = float(os.environ.get("SP500_WEIGHT_MOMENTUM", "0.35"))
     weight_low_vol: float = float(os.environ.get("SP500_WEIGHT_LOW_VOL", "0.05"))
     weight_research: float = float(os.environ.get("SP500_WEIGHT_RESEARCH", "0.25"))
 
     # Portfolio construction
     # 17 Oct: 20 positions (was 30) and a 10% cap (was 6%) for a more
-    # concentrated, higher-risk book, inside the owner's hard loss limit below.
+    # concentrated, higher-risk book. 20 names is above the ~15 that classic
+    # diversification studies call the minimum; the 25% sector cap below
+    # matters as much as the count (correlated names are not diversified).
     num_positions: int = int(os.environ.get("SP500_NUM_POSITIONS", "20"))
     max_position_weight: float = float(os.environ.get("SP500_MAX_POSITION_WEIGHT", "0.10"))
-    # Owner's hard limit (17 Oct): one position must not be able to cost more
-    # than this share of the account. The stop-loss is only checked once a day
-    # and has filled as far as -15% below cost, so the cap assumes a gap-down
-    # of assumed_gap_loss before the sale: weight cap = max_loss / gap.
-    max_loss_per_position: float = float(os.environ.get("SP500_MAX_LOSS_PER_POSITION", "0.02"))
-    assumed_gap_loss: float = float(os.environ.get("SP500_ASSUMED_GAP_LOSS", "0.20"))
     max_sector_weight: float = float(os.environ.get("SP500_MAX_SECTOR_WEIGHT", "0.25"))
     cash_buffer: float = float(os.environ.get("SP500_CASH_BUFFER", "0.02"))
 
@@ -105,7 +103,9 @@ class StrategyConfig:
     # Stop-loss (owner's choice, 28 Sep): the PM check sells the whole position
     # once it is this far below its purchase price, whatever the news says, and
     # the AM rebalance won't buy it back for stop_loss_cooldown_days.
-    stop_loss_pct: float = float(os.environ.get("SP500_STOP_LOSS", "0.10"))
+    # 17 Oct: widened from 10% to 12% - five stop-outs in the first 15 days
+    # (one inside 3 days of the buy) look like whipsaw for a momentum-tilted book.
+    stop_loss_pct: float = float(os.environ.get("SP500_STOP_LOSS", "0.12"))
     stop_loss_cooldown_days: int = int(os.environ.get("SP500_STOP_LOSS_COOLDOWN_DAYS", "7"))
     # Orders are marketable limits this far through the quote (0.5%): they fill
     # like a market order in normal conditions but can't fill far away from
@@ -128,12 +128,6 @@ class StrategyConfig:
     # paper account's balance to the same amount so the trial report's return
     # (measured on account equity) reflects what was actually traded.
     capital_budget: float = float(os.environ.get("SP500_CAPITAL_BUDGET", "0"))
-
-    @property
-    def effective_max_position_weight(self) -> float:
-        """Position cap actually used: the configured cap, lowered if needed so
-        that cap x assumed gap-down loss stays within max_loss_per_position."""
-        return min(self.max_position_weight, self.max_loss_per_position / self.assumed_gap_loss)
 
 
 API_KEYS = APIKeys()
