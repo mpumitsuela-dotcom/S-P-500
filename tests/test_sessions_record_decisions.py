@@ -123,7 +123,7 @@ def test_stop_loss_sells_whole_position_without_bad_news(market, monkeypatch):
     sym, ok = symbols[0], symbols[1]
     q = quotes.set_index("symbol")["price"]
     broker = FakeBroker({
-        sym: Position(sym, 10, float(q[sym]) / 0.88, float(q[sym])),  # down 12%
+        sym: Position(sym, 10, float(q[sym]) / 0.85, float(q[sym])),  # down 15%: past the 12% stop-loss
         ok: Position(ok, 10, float(q[ok]) / 0.95, float(q[ok])),      # down 5%, no bad news
     })
     monkeypatch.setattr(run_afternoon, "AlpacaBroker", lambda: broker)

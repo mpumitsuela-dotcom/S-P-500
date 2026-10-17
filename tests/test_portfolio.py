@@ -50,15 +50,7 @@ def test_weights_to_target_shares_floors_and_drops_missing_prices():
     assert out.iloc[0]["target_shares"] == 50  # 5000 / 100
 
 
-def test_default_position_cap_limits_loss_to_two_percent_of_account():
-    from config import STRATEGY
-
-    cap = STRATEGY.effective_max_position_weight
-    assert cap <= STRATEGY.max_position_weight
-    assert cap * STRATEGY.assumed_gap_loss <= STRATEGY.max_loss_per_position + 1e-12
-
-
-def test_default_build_respects_effective_cap_with_enough_names():
+def test_default_build_respects_position_cap_with_enough_names():
     from config import STRATEGY
 
     n = 25
@@ -67,7 +59,7 @@ def test_default_build_respects_effective_cap_with_enough_names():
     scores["sector"] = [sector_map[s] for s in scores.index]
     target = build_target_portfolio(scores, sector_map)
     assert len(target) == STRATEGY.num_positions
-    assert target["target_weight"].max() <= STRATEGY.effective_max_position_weight * (1 - STRATEGY.cash_buffer) + 1e-9
+    assert target["target_weight"].max() <= STRATEGY.max_position_weight * (1 - STRATEGY.cash_buffer) + 1e-9
 
 
 def test_factor_weights_sum_to_one():

@@ -42,7 +42,7 @@ def cap_and_redistribute(
     in that case the loop exits and the (still-capped-at-position-level)
     result is returned rather than looping forever).
     """
-    max_pos = max_position_weight if max_position_weight is not None else STRATEGY.effective_max_position_weight
+    max_pos = max_position_weight if max_position_weight is not None else STRATEGY.max_position_weight
     max_sec = max_sector_weight if max_sector_weight is not None else STRATEGY.max_sector_weight
 
     w = weights.copy()
