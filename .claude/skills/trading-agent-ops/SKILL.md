@@ -23,7 +23,7 @@ Write to the owner in short, plain sentences, with no jargon. Money in dollars, 
 
 ## Memory between sessions
 
-Read `references/lessons-learned.md` first: it holds what earlier sessions learned, the open questions, and the rules for adding to it. After each evening check, append anything new. Strategy settings stay locked; lessons only propose changes for the trial end.
+Read `references/lessons-learned.md` first: it holds what earlier sessions learned, the open questions, and the rules for adding to it. After each evening check, append anything new. Strategy settings stay locked unless the owner explicitly changes them (they did on 17 Oct, see the log); lessons only propose changes for the trial end.
 
 ## How it runs
 
