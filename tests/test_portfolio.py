@@ -48,3 +48,31 @@ def test_weights_to_target_shares_floors_and_drops_missing_prices():
     out = weights_to_target_shares(target, account_equity=10_000, latest_prices=prices)
     assert list(out["symbol"]) == ["AAA"]
     assert out.iloc[0]["target_shares"] == 50  # 5000 / 100
+
+
+def test_default_position_cap_limits_loss_to_two_percent_of_account():
+    from config import STRATEGY
+
+    cap = STRATEGY.effective_max_position_weight
+    assert cap <= STRATEGY.max_position_weight
+    assert cap * STRATEGY.assumed_gap_loss <= STRATEGY.max_loss_per_position + 1e-12
+
+
+def test_default_build_respects_effective_cap_with_enough_names():
+    from config import STRATEGY
+
+    n = 25
+    scores = pd.DataFrame({"combined_score": [3.0 - 0.1 * i for i in range(n)]}, index=[f"S{i}" for i in range(n)])
+    sector_map = {s: f"sec{i % 8}" for i, s in enumerate(scores.index)}
+    scores["sector"] = [sector_map[s] for s in scores.index]
+    target = build_target_portfolio(scores, sector_map)
+    assert len(target) == STRATEGY.num_positions
+    assert target["target_weight"].max() <= STRATEGY.effective_max_position_weight * (1 - STRATEGY.cash_buffer) + 1e-9
+
+
+def test_factor_weights_sum_to_one():
+    from config import STRATEGY
+
+    total = (STRATEGY.weight_value + STRATEGY.weight_quality + STRATEGY.weight_momentum
+             + STRATEGY.weight_low_vol + STRATEGY.weight_research)
+    assert abs(total - 1.0) < 1e-9

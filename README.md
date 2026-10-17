@@ -556,8 +556,9 @@ in. On Mac/Linux, use cron instead:
 
 ### Budget
 
-The agent trades the whole paper account (about $100K): 30 positions, each
-capped at 6%. To trade less, set `SP500_CAPITAL_BUDGET` to a dollar amount
+The agent trades the whole paper account (about $100K): 20 positions, each
+capped at 10% (and never more than 2% of the account at risk per position:
+cap x a 20% gap-down). To trade less, set `SP500_CAPITAL_BUDGET` to a dollar amount
 in the workflow's `env:` block and your PC's `.env`. Positions are then
 sized on `min(account equity, budget)`. If you set a cap, also reset the
 paper account balance to the same amount. The trial report measures return

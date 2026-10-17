@@ -76,13 +76,25 @@ class StrategyConfig:
     # where no point-in-time historical research data is available.
     weight_value: float = float(os.environ.get("SP500_WEIGHT_VALUE", "0.20"))
     weight_quality: float = float(os.environ.get("SP500_WEIGHT_QUALITY", "0.20"))
-    weight_momentum: float = float(os.environ.get("SP500_WEIGHT_MOMENTUM", "0.25"))
-    weight_low_vol: float = float(os.environ.get("SP500_WEIGHT_LOW_VOL", "0.15"))
-    weight_research: float = float(os.environ.get("SP500_WEIGHT_RESEARCH", "0.20"))
+    # 17 Oct (owner asked for more risk): low_vol cut from 0.15 to 0.05, with
+    # the freed 0.10 moved to momentum and research. Through day 15 the book
+    # ran at beta 0.39 and 6% volatility against a 20% target; the low-vol
+    # factor is what holds beta down (the vol overlay never adds leverage).
+    weight_momentum: float = float(os.environ.get("SP500_WEIGHT_MOMENTUM", "0.30"))
+    weight_low_vol: float = float(os.environ.get("SP500_WEIGHT_LOW_VOL", "0.05"))
+    weight_research: float = float(os.environ.get("SP500_WEIGHT_RESEARCH", "0.25"))
 
     # Portfolio construction
-    num_positions: int = int(os.environ.get("SP500_NUM_POSITIONS", "30"))
-    max_position_weight: float = float(os.environ.get("SP500_MAX_POSITION_WEIGHT", "0.06"))
+    # 17 Oct: 20 positions (was 30) and a 10% cap (was 6%) for a more
+    # concentrated, higher-risk book, inside the owner's hard loss limit below.
+    num_positions: int = int(os.environ.get("SP500_NUM_POSITIONS", "20"))
+    max_position_weight: float = float(os.environ.get("SP500_MAX_POSITION_WEIGHT", "0.10"))
+    # Owner's hard limit (17 Oct): one position must not be able to cost more
+    # than this share of the account. The stop-loss is only checked once a day
+    # and has filled as far as -15% below cost, so the cap assumes a gap-down
+    # of assumed_gap_loss before the sale: weight cap = max_loss / gap.
+    max_loss_per_position: float = float(os.environ.get("SP500_MAX_LOSS_PER_POSITION", "0.02"))
+    assumed_gap_loss: float = float(os.environ.get("SP500_ASSUMED_GAP_LOSS", "0.20"))
     max_sector_weight: float = float(os.environ.get("SP500_MAX_SECTOR_WEIGHT", "0.25"))
     cash_buffer: float = float(os.environ.get("SP500_CASH_BUFFER", "0.02"))
 
@@ -116,6 +128,12 @@ class StrategyConfig:
     # paper account's balance to the same amount so the trial report's return
     # (measured on account equity) reflects what was actually traded.
     capital_budget: float = float(os.environ.get("SP500_CAPITAL_BUDGET", "0"))
+
+    @property
+    def effective_max_position_weight(self) -> float:
+        """Position cap actually used: the configured cap, lowered if needed so
+        that cap x assumed gap-down loss stays within max_loss_per_position."""
+        return min(self.max_position_weight, self.max_loss_per_position / self.assumed_gap_loss)
 
 
 API_KEYS = APIKeys()
