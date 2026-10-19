@@ -68,32 +68,55 @@ def compute_rebalance_orders(
     turnover_used = 0.0
     orders: list[PlannedOrder] = []
 
-    for symbol, d in material.reindex(material.abs().sort_values(ascending=False).index).items():
-        if turnover_used >= max_turnover:
-            break
-        price = latest_prices.get(symbol)
-        if not price or price <= 0:
-            continue
+    # Cash the account really has (equity minus everything held). It is negative
+    # if an earlier session borrowed. Buys may only spend this plus the proceeds
+    # of the sells planned today, so a rebalance can never add leverage: on
+    # 19 Oct the turnover cap was spent on buys, few sells fitted under it, and
+    # the account ended 118% invested on margin.
+    cash_now = account_equity - sum(pos.market_value for pos in current_positions.values())
+    sell_proceeds = 0.0
+    buy_spent = 0.0
 
-        dollar_amount = d * account_equity
-        remaining_turnover_budget = (max_turnover - turnover_used) * account_equity
-        if abs(dollar_amount) > remaining_turnover_budget:
-            dollar_amount = remaining_turnover_budget if dollar_amount > 0 else -remaining_turnover_budget
-
-        qty = share_qty(abs(dollar_amount), price, symbol in (fractionable or set()))
-        if qty <= 0 or qty * price < MIN_ORDER_DOLLARS:
-            continue
-
-        side = "buy" if d > 0 else "sell"
-        # never sell more than currently held
-        if side == "sell":
-            held = current_positions.get(symbol)
-            qty = min(qty, held.qty if held else 0)
-            if qty <= 0:
+    # Sells first (they free cash and cut risk), then buys; largest drift first within each side.
+    ranked = material.reindex(material.abs().sort_values(ascending=False).index)
+    for want_sells in (True, False):
+        for symbol, d in ranked.items():
+            if (d < 0) != want_sells:
+                continue
+            if turnover_used >= max_turnover:
+                break
+            price = latest_prices.get(symbol)
+            if not price or price <= 0:
                 continue
 
-        orders.append(PlannedOrder(symbol=symbol, side=side, qty=qty, reason=f"drift {d:+.2%}"))
-        turnover_used += (qty * price) / account_equity
+            dollar_amount = d * account_equity
+            remaining_turnover_budget = (max_turnover - turnover_used) * account_equity
+            if abs(dollar_amount) > remaining_turnover_budget:
+                dollar_amount = remaining_turnover_budget if dollar_amount > 0 else -remaining_turnover_budget
+            if not want_sells:
+                buy_budget = cash_now + sell_proceeds - buy_spent
+                if buy_budget < MIN_ORDER_DOLLARS:
+                    break
+                dollar_amount = min(dollar_amount, buy_budget)
+
+            qty = share_qty(abs(dollar_amount), price, symbol in (fractionable or set()))
+            if qty <= 0 or qty * price < MIN_ORDER_DOLLARS:
+                continue
+
+            side = "sell" if want_sells else "buy"
+            # never sell more than currently held
+            if side == "sell":
+                held = current_positions.get(symbol)
+                qty = min(qty, held.qty if held else 0)
+                if qty <= 0:
+                    continue
+
+            orders.append(PlannedOrder(symbol=symbol, side=side, qty=qty, reason=f"drift {d:+.2%}"))
+            turnover_used += (qty * price) / account_equity
+            if side == "sell":
+                sell_proceeds += qty * price
+            else:
+                buy_spent += qty * price
 
     return orders
 
