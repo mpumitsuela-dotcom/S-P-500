@@ -81,3 +81,35 @@ def test_execute_orders_sells_before_buys():
     # sell of AAA must be processed (and succeed) before the buy of BBB is attempted
     assert results[0]["symbol"] == "AAA"
     assert results[0]["status"] == "filled"
+
+
+def _leverage_case():
+    # $100k account, fully invested in OLD1..OLD3 ($30k, $30k, $38k) with $2k cash.
+    positions = {
+        "OLD1": Position("OLD1", 300, 100.0, 100.0),
+        "OLD2": Position("OLD2", 300, 100.0, 100.0),
+        "OLD3": Position("OLD3", 380, 100.0, 100.0),
+    }
+    prices = pd.Series({"OLD1": 100.0, "OLD2": 100.0, "OLD3": 100.0, "NEW1": 100.0, "NEW2": 100.0})
+    # New target: all new names, big weights (biggest drifts are the buys).
+    target = pd.DataFrame({"symbol": ["NEW1", "NEW2"], "target_weight": [0.49, 0.49]})
+    return positions, prices, target
+
+
+def test_rebalance_never_buys_more_than_cash_plus_sell_proceeds():
+    positions, prices, target = _leverage_case()
+    orders = compute_rebalance_orders(target, positions, 100_000, prices, max_turnover=0.35,
+                                      fractionable={"NEW1", "NEW2", "OLD1", "OLD2", "OLD3"})
+    sells = sum(o.qty * prices[o.symbol] for o in orders if o.side == "sell")
+    buys = sum(o.qty * prices[o.symbol] for o in orders if o.side == "buy")
+    cash = 100_000 - sum(p.market_value for p in positions.values())
+    assert buys <= cash + sells + 1e-6
+    assert sells > 0  # the turnover budget is not all spent on buys
+
+
+def test_rebalance_makes_no_buys_while_account_is_borrowing():
+    positions, prices, target = _leverage_case()
+    positions["OLD3"] = Position("OLD3", 600, 100.0, 100.0)  # holdings now exceed equity: cash is negative
+    orders = compute_rebalance_orders(target, positions, 100_000, prices, max_turnover=0.05,
+                                      fractionable={"NEW1", "NEW2", "OLD1", "OLD2", "OLD3"})
+    assert all(o.side == "sell" for o in orders)
