@@ -113,3 +113,19 @@ def test_rebalance_makes_no_buys_while_account_is_borrowing():
     orders = compute_rebalance_orders(target, positions, 100_000, prices, max_turnover=0.05,
                                       fractionable={"NEW1", "NEW2", "OLD1", "OLD2", "OLD3"})
     assert all(o.side == "sell" for o in orders)
+
+
+def test_rebalance_spends_idle_cash_even_when_many_sells_are_planned():
+    # $100k account, $30k cash, three holdings to sell down, two names to buy.
+    positions = {f"OLD{i}": Position(f"OLD{i}", 200, 100.0, 100.0) for i in range(1, 4)}  # $20k each = $60k; plus 10k other
+    positions["KEEP"] = Position("KEEP", 100, 100.0, 100.0)  # $10k held, stays
+    prices = pd.Series({"OLD1": 100.0, "OLD2": 100.0, "OLD3": 100.0, "KEEP": 100.0, "NEW1": 100.0, "NEW2": 100.0})
+    target = pd.DataFrame({"symbol": ["KEEP", "NEW1", "NEW2"], "target_weight": [0.10, 0.44, 0.44]})
+    frac = {"OLD1", "OLD2", "OLD3", "KEEP", "NEW1", "NEW2"}
+    orders = compute_rebalance_orders(target, positions, 100_000, prices, max_turnover=0.35, fractionable=frac)
+    buys = sum(o.qty * prices[o.symbol] for o in orders if o.side == "buy")
+    sells = sum(o.qty * prices[o.symbol] for o in orders if o.side == "sell")
+    cash = 100_000 - sum(p.market_value for p in positions.values())  # $30k
+    assert buys >= min(cash, 30_000) - 1.0   # the idle cash is put to work first
+    assert buys <= cash + sells + 1e-6       # and still never more than cash + sale proceeds
+    assert (buys + sells) / 100_000 <= 0.35 + 1e-9
