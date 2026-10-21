@@ -111,7 +111,10 @@ def main() -> int:
 
         symbols = list(current_positions.keys())
         latest_quotes = get_latest_quotes(symbols).set_index("symbol")["price"]
-        reference_prices = pd.Series({s: p.avg_entry_price for s, p in current_positions.items()})
+        # The sanity check looks for a bad tick or a garbled feed, so compare with
+        # yesterday's close. Comparing with the purchase price halted the whole
+        # risk check on 21 Oct because a $7 holding was up 36% since it was bought.
+        reference_prices = pd.Series({s: (p.lastday_price or p.avg_entry_price) for s, p in current_positions.items()})
         equity_curve = broker.get_portfolio_history()
 
         run_all_guards(

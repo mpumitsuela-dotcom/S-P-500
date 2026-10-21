@@ -214,3 +214,18 @@ def test_orders_are_marketable_limits(market, monkeypatch):
     monkeypatch.setattr(run_morning, "AlpacaBroker", lambda: broker)
     assert run_morning.main() == 0
     assert broker.orders and all(lp is not None for lp in broker.limits)
+
+
+def test_afternoon_sanity_check_uses_yesterdays_close_not_the_purchase_price(market, monkeypatch):
+    """A holding up 40% since it was bought must not halt the risk check (21 Oct, MRNA)."""
+    tmp_path, symbols, _, quotes = market
+    sym = symbols[0]
+    q = quotes.set_index("symbol")["price"]
+    price = float(q[sym])
+    broker = FakeBroker({sym: Position(sym, 10, price / 1.4, price, lastday_price=price * 0.99)})  # +40% since entry, +1% today
+    monkeypatch.setattr(run_afternoon, "AlpacaBroker", lambda: broker)
+    monkeypatch.setattr(run_afternoon, "get_news_sentiment_frame", lambda syms: pd.DataFrame(
+        [{"symbol": s, "headline_count": 0, "sentiment_score": 0, "flagged_negative": False, "top_headlines": []} for s in syms]))
+    assert run_afternoon.main() == 0
+    sessions = [r for r in _records(tmp_path) if r["type"] == "session"]
+    assert sessions and sessions[-1]["outcome"] != "halted"

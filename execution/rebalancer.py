@@ -77,9 +77,14 @@ def compute_rebalance_orders(
     sell_proceeds = 0.0
     buy_spent = 0.0
 
-    # Sells first (they free cash and cut risk), then buys; largest drift first within each side.
+    # Three passes so a rebalance never adds leverage and never leaves real cash idle:
+    #   1. buys paid for with cash the account already has;
+    #   2. sells (they cut risk and free more cash);
+    #   3. buys paid for with the proceeds of today's sells.
+    # Within each pass the largest drift goes first, under the shared turnover cap.
+    # (Sells-first alone left 30% cash on 21 Oct: the sells used the whole cap.)
     ranked = material.reindex(material.abs().sort_values(ascending=False).index)
-    for want_sells in (True, False):
+    for want_sells, own_cash_only in ((False, True), (True, False), (False, False)):
         for symbol, d in ranked.items():
             if (d < 0) != want_sells:
                 continue
@@ -90,13 +95,16 @@ def compute_rebalance_orders(
                 continue
 
             dollar_amount = d * account_equity
+            if not want_sells:  # a second buy pass tops up what pass 1 already bought
+                dollar_amount -= sum(o.qty * price for o in orders if o.symbol == symbol and o.side == "buy")
             remaining_turnover_budget = (max_turnover - turnover_used) * account_equity
             if abs(dollar_amount) > remaining_turnover_budget:
                 dollar_amount = remaining_turnover_budget if dollar_amount > 0 else -remaining_turnover_budget
             if not want_sells:
-                buy_budget = cash_now + sell_proceeds - buy_spent
-                if buy_budget < MIN_ORDER_DOLLARS:
-                    break
+                funds = cash_now if own_cash_only else cash_now + sell_proceeds
+                buy_budget = funds - buy_spent
+                if buy_budget < MIN_ORDER_DOLLARS or dollar_amount < MIN_ORDER_DOLLARS:
+                    continue
                 dollar_amount = min(dollar_amount, buy_budget)
 
             qty = share_qty(abs(dollar_amount), price, symbol in (fractionable or set()))
@@ -111,7 +119,11 @@ def compute_rebalance_orders(
                 if qty <= 0:
                     continue
 
-            orders.append(PlannedOrder(symbol=symbol, side=side, qty=qty, reason=f"drift {d:+.2%}"))
+            existing = next((o for o in orders if o.symbol == symbol and o.side == side), None)
+            if existing:  # a second buy pass tops up the same name
+                existing.qty += qty
+            else:
+                orders.append(PlannedOrder(symbol=symbol, side=side, qty=qty, reason=f"drift {d:+.2%}"))
             turnover_used += (qty * price) / account_equity
             if side == "sell":
                 sell_proceeds += qty * price
