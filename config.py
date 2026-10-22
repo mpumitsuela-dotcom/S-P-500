@@ -94,6 +94,10 @@ class StrategyConfig:
     num_positions: int = int(os.environ.get("SP500_NUM_POSITIONS", "20"))
     max_position_weight: float = float(os.environ.get("SP500_MAX_POSITION_WEIGHT", "0.10"))
     max_sector_weight: float = float(os.environ.get("SP500_MAX_SECTOR_WEIGHT", "0.25"))
+    # Rebalance band (22 Oct): a stock already held stays in the target while it
+    # ranks within num_positions + rank_buffer. Cuts the one-to-three-day round
+    # trips seen in the trial (UNP, SPG, WELL, TRV...). 0 = off (old behaviour).
+    rank_buffer: int = int(os.environ.get("SP500_RANK_BUFFER", "10"))
     cash_buffer: float = float(os.environ.get("SP500_CASH_BUFFER", "0.02"))
 
     # Risk
@@ -107,6 +111,9 @@ class StrategyConfig:
     # (one inside 3 days of the buy) look like whipsaw for a momentum-tilted book.
     stop_loss_pct: float = float(os.environ.get("SP500_STOP_LOSS", "0.12"))
     stop_loss_cooldown_days: int = int(os.environ.get("SP500_STOP_LOSS_COOLDOWN_DAYS", "7"))
+    # Holdings worth less than this are not stop-loss checked: the trial sold
+    # $7-$40 leftovers (BE, VRT, ECHO), which adds orders and no protection.
+    min_stop_check_dollars: float = float(os.environ.get("SP500_MIN_STOP_CHECK_DOLLARS", "100"))
     # Orders are marketable limits this far through the quote (0.5%): they fill
     # like a market order in normal conditions but can't fill far away from
     # the price the agent planned on. 0 = plain market orders.
@@ -140,4 +147,6 @@ LIVE_TRADING_CONFIRM_VALUE = "YES_I_UNDERSTAND"
 # Bounded trial: run for a fixed number of days, then stop automatically and
 # wait for a human decision, rather than trading on indefinitely by default.
 # See execution/trial.py and execution/guards.py check_trial_period.
-TRIAL_LENGTH_DAYS = int(os.environ.get("SP500_TRIAL_DAYS", "30"))
+# 22 Oct: the owner extended the run to 6 months after the first 30 days (24 Oct):
+# 24 Sep 2026 -> 24 Apr 2027 = 212 calendar days.
+TRIAL_LENGTH_DAYS = int(os.environ.get("SP500_TRIAL_DAYS", "212"))

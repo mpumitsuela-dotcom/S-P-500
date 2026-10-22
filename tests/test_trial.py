@@ -58,3 +58,14 @@ def test_reset_trial_clears_markers(tmp_path, monkeypatch):
     reset_trial()
     assert not date_marker.exists()
     assert not equity_marker.exists()
+
+
+def test_trial_runs_six_months_after_the_first_thirty_days():
+    from datetime import date
+    from config import TRIAL_LENGTH_DAYS
+    from execution.trial import trial_active
+
+    start = date(2026, 9, 24)
+    assert trial_active(start, date(2026, 10, 25), TRIAL_LENGTH_DAYS)      # past the old 30-day end
+    assert trial_active(start, date(2027, 4, 23), TRIAL_LENGTH_DAYS)       # last day of the extended run
+    assert not trial_active(start, date(2027, 4, 24), TRIAL_LENGTH_DAYS)   # six months after 24 Oct

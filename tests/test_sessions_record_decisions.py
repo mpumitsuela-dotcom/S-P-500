@@ -229,3 +229,18 @@ def test_afternoon_sanity_check_uses_yesterdays_close_not_the_purchase_price(mar
     assert run_afternoon.main() == 0
     sessions = [r for r in _records(tmp_path) if r["type"] == "session"]
     assert sessions and sessions[-1]["outcome"] != "halted"
+
+
+def test_stop_loss_ignores_dust_positions(market, monkeypatch):
+    """A $7 leftover at -15% must not be sold by the stop-loss (BE/VRT/ECHO on 14-16 Oct)."""
+    tmp_path, symbols, _, quotes = market
+    sym = symbols[0]
+    q = quotes.set_index("symbol")["price"]
+    price = float(q[sym])
+    broker = FakeBroker({sym: Position(sym, 7 / price, price / 0.85, price)})  # worth $7, down 15%
+    monkeypatch.setattr(run_afternoon, "AlpacaBroker", lambda: broker)
+    monkeypatch.setattr(run_afternoon, "get_news_sentiment_frame", lambda syms: pd.DataFrame(
+        [{"symbol": s, "headline_count": 0, "sentiment_score": 0, "flagged_negative": False, "top_headlines": []} for s in syms]))
+    assert run_afternoon.main() == 0
+    trades = [r for r in _records(tmp_path) if r["type"] == "trade"]
+    assert trades == []

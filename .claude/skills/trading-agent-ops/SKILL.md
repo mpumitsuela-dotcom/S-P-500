@@ -69,6 +69,10 @@ If a report was missed because of a bug, regenerate it after the fix. Run `pytho
 - Loosen a guard (drawdown, price sanity, data freshness, coverage) to make a halt go away. A halt is information. Fix the data problem behind it, or, for drawdown and trial end, ask the owner.
 - Put API keys in code, commits, issues or chat. They live in GitHub secrets and the PC's `.env`.
 
-## When the 30-day trial ends
+## When the 30-day review arrives (about 24 Oct 2026) and when the run ends (24 Apr 2027)
 
-The `trial_period` guard halts both sessions and `TRIAL_REPORT.md` appears on agent-state. Summarise the agent's return against the S&P 500 over the trial, noting honestly that 30 days is too short to prove an edge either way. Then offer the owner the choices: extend (raise `SP500_TRIAL_DAYS`), start fresh (delete `.state/trial_start_date.txt` and `.state/trial_start_equity.txt` on agent-state), or stop. Wait for their answer. If Claude check-in routines exist (names starting "Trading agent:"), delete them once the owner has decided to stop.
+The owner extended the run on 22 Oct: it now lasts 212 calendar days from 24 Sep 2026, ending 24 Apr 2027 (`SP500_TRIAL_DAYS`, `config.TRIAL_LENGTH_DAYS`). **At day 30 nothing stops and no routine is deleted.** On the first evening check on or after 24 Oct, send the owner a short 30-day summary (agent vs S&P 500, the faults found and fixed, the backtest results if available), mention the settings changes of 17-22 Oct (results before and after are on different settings), and carry on. Do not ask the owner to decide anything at day 30 unless something is wrong.
+
+When the `trial_period` guard finally halts both sessions (24 Apr 2027) and `TRIAL_REPORT.md` appears on agent-state: summarise the whole run against the S&P 500, say honestly what it does and does not prove, and offer the owner the choices: extend (raise `SP500_TRIAL_DAYS`), start fresh (delete `.state/trial_start_date.txt` and `.state/trial_start_equity.txt` on agent-state), or stop. Wait for their answer. If Claude check-in routines exist (names starting "Trading agent:"), delete them only once the owner has decided to stop. Cost note: the routines in this session cost roughly $180-350 per month.
+
+Also: US clocks change on 1 Nov 2026 and 14 Mar 2027; every routine cron needs +1 hour UTC after the November change and -1 hour after the March change.

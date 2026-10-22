@@ -63,7 +63,7 @@ def main() -> int:
     start = text(files, ".state/trial_start_date.txt")
     if start:
         n = (date.fromisoformat(day) - date.fromisoformat(start)).days + 1  # calendar day, 1-based
-        print(f"Trial:         started {start} (day {n} of 30), start equity ${float(text(files, '.state/trial_start_equity.txt') or 0):,.2f}")
+        print(f"Trial:         started {start} (day {n} of 212; the 30-day review was 24 Oct, the run ends 24 Apr 2027), start equity ${float(text(files, '.state/trial_start_equity.txt') or 0):,.2f}")
     else:
         print("Trial:         not started yet (no real session has run)")
     if "TRIAL_REPORT.md" in files:

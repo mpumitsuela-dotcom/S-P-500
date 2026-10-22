@@ -68,3 +68,29 @@ def test_factor_weights_sum_to_one():
     total = (STRATEGY.weight_value + STRATEGY.weight_quality + STRATEGY.weight_momentum
              + STRATEGY.weight_low_vol + STRATEGY.weight_research)
     assert abs(total - 1.0) < 1e-9
+
+
+def _ranked(n=30):
+    return pd.DataFrame({"combined_score": [3.0 - 0.1 * i for i in range(n)]}, index=[f"S{i}" for i in range(n)])
+
+
+def test_rebalance_band_keeps_a_held_name_that_slipped_a_few_places():
+    scores = _ranked()
+    held = {"S12"}  # rank 13: outside the top 10 but inside 10 + band 5
+    out = select_top_names(scores, num_positions=10, held=held, rank_buffer=5)
+    assert "S12" in out.index
+    assert len(out) == 10
+    assert "S9" not in out.index  # it took the slot of the lowest-ranked new name
+
+
+def test_rebalance_band_drops_a_held_name_that_fell_out_of_the_band():
+    scores = _ranked()
+    out = select_top_names(scores, num_positions=10, held={"S20"}, rank_buffer=5)
+    assert "S20" not in out.index
+    assert list(out.index) == [f"S{i}" for i in range(10)]
+
+
+def test_rebalance_band_off_matches_plain_top_n():
+    scores = _ranked()
+    out = select_top_names(scores, num_positions=10, held={"S12"}, rank_buffer=0)
+    assert list(out.index) == [f"S{i}" for i in range(10)]

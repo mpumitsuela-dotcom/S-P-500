@@ -44,7 +44,7 @@ def build_trial_report(
     spy_return = _spy_return(trial_start, today)
 
     lines = [
-        f"# 30-day trial report — {trial_start} to {today}",
+        f"# Trial report — {trial_start} to {today}",
         "",
         "## Performance",
         "",
@@ -82,7 +82,7 @@ def build_trial_report(
         "",
         "## Honest context",
         "",
-        "This is a single ~30-day sample from one specific starting date - far too short "
+        "This is a single sample from one specific starting date - far too short "
         "and too path-dependent to be a statistically meaningful test of whether this "
         "strategy actually beats the index, in either direction. No legitimate trading "
         "system can guarantee outperformance over a fixed short window; this report is an "

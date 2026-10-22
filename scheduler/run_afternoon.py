@@ -132,7 +132,8 @@ def main() -> int:
         for sym, pos in current_positions.items():
             intraday_move = (latest_quotes.get(sym, pos.current_price) / pos.avg_entry_price) - 1.0
             moves[sym] = intraday_move
-            if STRATEGY.stop_loss_pct > 0 and intraday_move <= -STRATEGY.stop_loss_pct and pos.qty > 0:
+            if (STRATEGY.stop_loss_pct > 0 and intraday_move <= -STRATEGY.stop_loss_pct and pos.qty > 0
+                    and pos.market_value >= STRATEGY.min_stop_check_dollars):
                 stopped.add(sym)
                 planned.append(
                     PlannedOrder(

@@ -24,7 +24,7 @@ SESSION_NAMES = {"AM": "morning rebalance", "PM": "afternoon risk check"}
 # Guard halts that are a decision about the money, not a malfunction.
 OWNER_DECISIONS = {
     "trial_period": (
-        "The 30-day trial has ended, so the agent has stopped trading. TRIAL_REPORT.md on the "
+        "The trial has ended, so the agent has stopped trading. TRIAL_REPORT.md on the "
         "agent-state branch compares its return with the S&P 500. Decide whether to extend the "
         "trial (raise SP500_TRIAL_DAYS), start a fresh one, or stop."
     ),

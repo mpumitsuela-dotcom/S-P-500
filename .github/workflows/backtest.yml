@@ -1,0 +1,53 @@
+name: backtest
+
+# Manual only. Downloads ~6 years of daily bars for the S&P 500 + SPY from Alpaca
+# (data only, no orders) and compares the agent's settings. Never trades.
+on:
+  workflow_dispatch:
+    inputs:
+      years:
+        description: "Years of history"
+        default: "6"
+      freq:
+        description: "Rebalance cadence: W = weekly, M = monthly"
+        type: choice
+        default: W
+        options: [W, M]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backtest
+  cancel-in-progress: false
+
+env:
+  ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
+  ALPACA_API_SECRET_KEY: ${{ secrets.ALPACA_API_SECRET_KEY }}
+  ALPACA_BASE_URL: https://paper-api.alpaca.markets
+  FMP_API_KEY: ${{ secrets.FMP_API_KEY || secrets.FINANCIALMODELINGPREP }}
+  FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY || secrets.FINNHUB }}
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Run backtests
+        run: python scripts/run_backtest.py --years "${{ github.event.inputs.years || '6' }}" --freq "${{ github.event.inputs.freq || 'W' }}"
+      - name: Show summary
+        if: always()
+        run: |
+          if [ -f results/backtest/summary.md ]; then cat results/backtest/summary.md >> "$GITHUB_STEP_SUMMARY"; fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backtest-results
+          path: results/backtest/
+          retention-days: 90

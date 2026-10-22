@@ -216,9 +216,10 @@ runs, same pattern as `fmp_data.py`. Like fundamentals, it is intentionally
 tier only gives current snapshots, not point-in-time history - using
 today's news/analyst data to score a past date would be lookahead bias.
 
-## The 30-day trial
+## The trial (now 212 days: the 30-day review on 24 Oct, then 6 more months)
 
-By default, this system runs for `TRIAL_LENGTH_DAYS` (30, `SP500_TRIAL_DAYS`)
+The owner extended the run on 22 Oct to end on 24 Apr 2027. By default,
+this system runs for `TRIAL_LENGTH_DAYS` (212, `SP500_TRIAL_DAYS`; it was 30)
 calendar days from its first real run, then **stops itself automatically**:
 
 - The trial clock starts itself, once, the first time `run_morning.py` or
@@ -553,6 +554,13 @@ in the workflow and `set SP500_RUNNER_ROLE=primary` in `scripts/run_pc.bat`.
 The PC only covers for the cloud while it's switched on, awake and logged
 in. On Mac/Linux, use cron instead:
 `*/15 * * * 1-5 cd /path/to/S-P-500 && SP500_RUNNER_ROLE=backup .venv/bin/python scheduler/run_shared.py >> logs/pc_runner.log 2>&1`
+
+### Backtesting
+
+`scripts/run_backtest.py` (or the manual `backtest` workflow in GitHub Actions) downloads
+~6 years of Alpaca daily bars and compares five variants of the settings. It only
+tests the price factors (momentum, low volatility), has survivorship bias, and does not
+simulate the stop-loss; read the caveats printed with every summary.
 
 ### Budget
 

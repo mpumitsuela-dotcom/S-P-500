@@ -227,7 +227,7 @@ def main() -> int:
             logger.info("Not buying back (recent stop-loss): %s", sorted(cooldown))
             scores = scores[~scores.index.isin(cooldown)]
 
-        target = build_target_portfolio(scores, sector_map)
+        target = build_target_portfolio(scores, sector_map, held=set(current_positions))
         weights_series = target.set_index("symbol")["target_weight"]
         realized_vol = estimate_portfolio_volatility(prices, weights_series)
         scaled_weights = apply_vol_target(weights_series, realized_vol)
