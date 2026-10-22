@@ -17,9 +17,22 @@ import pandas as pd
 from config import STRATEGY
 
 
-def select_top_names(scores: pd.DataFrame, num_positions: int | None = None) -> pd.DataFrame:
+def select_top_names(
+    scores: pd.DataFrame, num_positions: int | None = None, held: set[str] | None = None, rank_buffer: int | None = None
+) -> pd.DataFrame:
+    """Top N by combined_score, with a rebalance band: names already held that
+    still rank within N + rank_buffer keep their place (best-ranked first), and
+    the remaining slots are filled from the top of the ranking. `scores` must be
+    sorted best-first (compute_combined_scores does that)."""
     n = num_positions or STRATEGY.num_positions
-    return scores.head(n).copy()
+    buffer = STRATEGY.rank_buffer if rank_buffer is None else rank_buffer
+    if not held or buffer <= 0:
+        return scores.head(n).copy()
+    in_band = scores.head(n + buffer).index
+    keep = [s for s in in_band if s in held][:n]
+    fill = [s for s in scores.index if s not in keep][: n - len(keep)]
+    chosen = set(keep) | set(fill)
+    return scores.loc[[s for s in scores.index if s in chosen]].copy()
 
 
 def _initial_weights(selected: pd.DataFrame) -> pd.Series:
@@ -80,14 +93,14 @@ def cap_and_redistribute(
 
 
 def build_target_portfolio(
-    scores: pd.DataFrame, sector_map: dict[str, str], num_positions: int | None = None
+    scores: pd.DataFrame, sector_map: dict[str, str], num_positions: int | None = None, held: set[str] | None = None
 ) -> pd.DataFrame:
     """
     Returns a DataFrame [symbol, sector, combined_score, target_weight]
     for the selected names, respecting position/sector caps and leaving
     STRATEGY.cash_buffer uninvested.
     """
-    selected = select_top_names(scores, num_positions)
+    selected = select_top_names(scores, num_positions, held)
     raw_weights = _initial_weights(selected)
     capped = cap_and_redistribute(raw_weights, sector_map)
     investable = 1.0 - STRATEGY.cash_buffer

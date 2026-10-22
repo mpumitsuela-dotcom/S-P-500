@@ -50,23 +50,36 @@ def _month_end_dates(all_dates: pd.DatetimeIndex) -> list[pd.Timestamp]:
     return list(s.groupby([all_dates.year, all_dates.month]).max())
 
 
+def _week_end_dates(all_dates: pd.DatetimeIndex) -> list[pd.Timestamp]:
+    s = pd.Series(all_dates, index=all_dates)
+    iso = all_dates.isocalendar()
+    return list(s.groupby([iso["year"].to_numpy(), iso["week"].to_numpy()]).max())
+
+
 def run_backtest(
     prices: pd.DataFrame,
     sector_map: dict[str, str],
     benchmark_prices: pd.Series,
     starting_cash: float = 100_000.0,
     warmup_days: int = 260,
+    freq: str = "M",
+    max_turnover: float | None = None,
 ) -> BacktestResult:
     """
     prices: long frame [symbol, date, open, high, low, close, volume] for the whole backtest period
     benchmark_prices: Series indexed by date, e.g. SPY close, for comparison
+    freq: "M" = rebalance on the last trading day of each month, "W" = each week (closer to
+        the live agent, which checks every day). max_turnover: cap per rebalance as a share of
+        equity (None = the live default, 35%; use 1.0 for a full rebalance on a slow cadence).
     """
     all_dates = pd.DatetimeIndex(sorted(prices["date"].unique()))
     if len(all_dates) <= warmup_days:
         raise ValueError(f"Not enough price history ({len(all_dates)} days) for a {warmup_days}-day warmup")
 
     tradeable_dates = all_dates[warmup_days:]
-    rebalance_dates = [d for d in _month_end_dates(all_dates) if d in set(tradeable_dates)]
+    period_ends = _week_end_dates(all_dates) if freq == "W" else _month_end_dates(all_dates)
+    tradeable_set = set(tradeable_dates)
+    rebalance_dates = {d for d in period_ends if d in tradeable_set}
 
     broker = SimulationBroker(starting_cash)
     equity_points: dict[pd.Timestamp, float] = {}
@@ -82,7 +95,7 @@ def run_backtest(
             hist = _prices_as_of(prices, current_date)
             scores = compute_combined_scores(hist, sector_map, fundamentals=None)
             scores = scores[scores.index.isin(day_prices.index)]  # only names with a tradable price today
-            target = build_target_portfolio(scores, sector_map)
+            target = build_target_portfolio(scores, sector_map, held=set(broker.get_positions()))
 
             weights_series = target.set_index("symbol")["target_weight"]
             realized_vol = estimate_portfolio_volatility(hist, weights_series)
@@ -90,9 +103,11 @@ def run_backtest(
             target = target.assign(target_weight=target["symbol"].map(scaled_weights))
 
             equity = broker.get_account_equity()
-            orders = compute_rebalance_orders(target, broker.get_positions(), equity, day_prices)
+            orders = compute_rebalance_orders(target, broker.get_positions(), equity, day_prices, max_turnover=max_turnover)
             results = execute_orders(broker, orders, latest_prices=day_prices)
-            rebalance_log.append({"date": str(current_date.date()), "orders": results, "realized_vol": realized_vol})
+            traded = sum(abs(r["qty"]) * float(day_prices.get(r["symbol"], 0.0)) for r in results if r.get("status") == "filled")
+            rebalance_log.append({"date": str(current_date.date()), "orders": results, "realized_vol": realized_vol,
+                                  "traded_dollars": traded, "equity": equity})
             logger.info("Rebalanced on %s: %d orders", current_date.date(), len(orders))
 
         equity_points[current_date] = broker.get_account_equity()
