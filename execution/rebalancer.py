@@ -73,7 +73,10 @@ def compute_rebalance_orders(
     # of the sells planned today, so a rebalance can never add leverage: on
     # 19 Oct the turnover cap was spent on buys, few sells fitted under it, and
     # the account ended 118% invested on margin.
-    cash_now = account_equity - sum(pos.market_value for pos in current_positions.values())
+    # The configured cash buffer (2%) is kept back: on 29 Oct the account ended at -$19 cash
+    # because limit orders fill a little above the planned dollars.
+    cash_now = (account_equity - sum(pos.market_value for pos in current_positions.values())
+                - STRATEGY.cash_buffer * account_equity)
     sell_proceeds = 0.0
     buy_spent = 0.0
 

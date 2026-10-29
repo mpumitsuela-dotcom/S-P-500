@@ -126,6 +126,17 @@ def test_rebalance_spends_idle_cash_even_when_many_sells_are_planned():
     buys = sum(o.qty * prices[o.symbol] for o in orders if o.side == "buy")
     sells = sum(o.qty * prices[o.symbol] for o in orders if o.side == "sell")
     cash = 100_000 - sum(p.market_value for p in positions.values())  # $30k
-    assert buys >= min(cash, 30_000) - 1.0   # the idle cash is put to work first
+    assert buys >= cash - 0.02 * 100_000 - 1.0   # the idle cash (minus the 2% buffer) is put to work first
     assert buys <= cash + sells + 1e-6       # and still never more than cash + sale proceeds
     assert (buys + sells) / 100_000 <= 0.35 + 1e-9
+
+
+def test_rebalance_keeps_the_cash_buffer_when_spending_idle_cash():
+    from config import STRATEGY
+
+    positions = {"KEEP": Position("KEEP", 900, 100.0, 100.0)}  # $90k held, $10k cash
+    prices = pd.Series({"KEEP": 100.0, "NEW1": 100.0})
+    target = pd.DataFrame({"symbol": ["KEEP", "NEW1"], "target_weight": [0.90, 0.10]})
+    orders = compute_rebalance_orders(target, positions, 100_000, prices, max_turnover=1.0, fractionable={"KEEP", "NEW1"})
+    buys = sum(o.qty * prices[o.symbol] for o in orders if o.side == "buy")
+    assert buys <= 10_000 - STRATEGY.cash_buffer * 100_000 + 1e-6
