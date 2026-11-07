@@ -101,7 +101,9 @@ class StrategyConfig:
     cash_buffer: float = float(os.environ.get("SP500_CASH_BUFFER", "0.02"))
 
     # Risk
-    max_daily_drawdown_halt: float = float(os.environ.get("SP500_MAX_DAILY_DD_HALT", "0.06"))
+    # Halts the sessions when equity is this far below its recent peak. 7 Nov: the
+    # owner raised it from 6% to 12% after the 6 Nov halt (account 8.6% below its high).
+    max_daily_drawdown_halt: float = float(os.environ.get("SP500_MAX_DAILY_DD_HALT", "0.12"))
     max_position_daily_move_sanity: float = float(os.environ.get("SP500_PRICE_SANITY_PCT", "0.35"))
     target_annual_vol: float = float(os.environ.get("SP500_TARGET_VOL", "0.15"))
     # Stop-loss (owner's choice, 28 Sep): the PM check sells the whole position
