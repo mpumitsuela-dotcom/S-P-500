@@ -123,7 +123,7 @@ failure halts that run - no partial trading, no "best effort":
 5. **Data freshness** - refuses to trade on stale price data (>5 days old).
 6. **Universe coverage** - refuses to trade if fundamentals/price data
    couldn't be fetched for enough of the universe (default: need 80%).
-7. **Drawdown halt** - stops new buys if the account has dropped >6% from
+7. **Drawdown halt** - stops new buys if the account has dropped >12% (6% until 7 Nov) from
    its recent peak (configurable). Wired to Alpaca's real portfolio history
    on both sessions.
 8. **Price sanity** - refuses to trade if any held symbol's price moved
