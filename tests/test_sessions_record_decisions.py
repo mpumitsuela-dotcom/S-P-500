@@ -244,3 +244,18 @@ def test_stop_loss_ignores_dust_positions(market, monkeypatch):
     assert run_afternoon.main() == 0
     trades = [r for r in _records(tmp_path) if r["type"] == "trade"]
     assert trades == []
+
+
+def test_news_trim_ignores_dust_positions(market, monkeypatch):
+    """A $5 leftover with bad news and a 25% drop must not be trimmed (NVDA $3 order on 9 Nov)."""
+    tmp_path, symbols, _, quotes = market
+    sym = symbols[0]
+    q = quotes.set_index("symbol")["price"]
+    price = float(q[sym])
+    broker = FakeBroker({sym: Position(sym, 5 / price, price / 0.75, price)})  # worth $5, down 25%
+    monkeypatch.setattr(run_afternoon, "AlpacaBroker", lambda: broker)
+    monkeypatch.setattr(run_afternoon, "get_news_sentiment_frame", lambda syms: pd.DataFrame(
+        [{"symbol": s, "headline_count": 9, "sentiment_score": -9, "flagged_negative": True, "top_headlines": []} for s in syms]))
+    assert run_afternoon.main() == 0
+    trades = [r for r in _records(tmp_path) if r["type"] == "trade"]
+    assert trades == []

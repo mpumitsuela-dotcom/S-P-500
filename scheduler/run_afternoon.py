@@ -150,7 +150,7 @@ def main() -> int:
                 continue
             sentiment_row = sentiment.loc[sym] if sym in sentiment.index else None
             flagged = bool(sentiment_row["flagged_negative"]) if sentiment_row is not None else False
-            if flagged and intraday_move <= INTRADAY_DROP_THRESHOLD:
+            if flagged and intraday_move <= INTRADAY_DROP_THRESHOLD and pos.market_value >= STRATEGY.min_stop_check_dollars:
                 # Whole-share holdings are trimmed in whole shares; fractional ones to 3 decimals.
                 trim_qty = int(pos.qty * TRIM_FRACTION) if float(pos.qty).is_integer() else math.floor(pos.qty * TRIM_FRACTION * 1000) / 1000
                 if trim_qty > 0:
