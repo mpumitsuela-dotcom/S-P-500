@@ -438,3 +438,4 @@
 {"type": "session", "timestamp": "2026-11-19T15:12:05-05:00", "date": "2026-11-19", "session": "PM", "outcome": "completed", "detail": "Sold 1 position(s) on the risk check (stop-loss: LITE)", "positions": 35, "negative_news": []}
 {"type": "session", "timestamp": "2026-11-20T10:10:02-05:00", "date": "2026-11-20", "session": "AM", "outcome": "halted", "detail": "Safety check stopped the session: drawdown_halt: drawdown -12.2% exceeds halt threshold"}
 {"type": "session", "timestamp": "2026-11-20T15:11:39-05:00", "date": "2026-11-20", "session": "PM", "outcome": "halted", "detail": "Safety check stopped the session: drawdown_halt: drawdown -12.2% exceeds halt threshold"}
+{"type": "session", "timestamp": "2026-11-23T10:10:07-05:00", "date": "2026-11-23", "session": "AM", "outcome": "halted", "detail": "Safety check stopped the session: drawdown_halt: drawdown -20.2% exceeds halt threshold"}
