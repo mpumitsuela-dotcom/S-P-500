@@ -442,3 +442,4 @@
 {"type": "session", "timestamp": "2026-11-23T15:11:32-05:00", "date": "2026-11-23", "session": "PM", "outcome": "halted", "detail": "Safety check stopped the session: drawdown_halt: drawdown -20.2% exceeds halt threshold"}
 {"type": "session", "timestamp": "2026-11-24T10:09:27-05:00", "date": "2026-11-24", "session": "AM", "outcome": "halted", "detail": "Safety check stopped the session: drawdown_halt: drawdown -17.8% exceeds halt threshold"}
 {"type": "session", "timestamp": "2026-11-24T15:11:21-05:00", "date": "2026-11-24", "session": "PM", "outcome": "halted", "detail": "Safety check stopped the session: drawdown_halt: drawdown -17.8% exceeds halt threshold"}
+{"type": "session", "timestamp": "2026-11-25T10:10:18-05:00", "date": "2026-11-25", "session": "AM", "outcome": "halted", "detail": "Safety check stopped the session: drawdown_halt: drawdown -18.0% exceeds halt threshold"}
